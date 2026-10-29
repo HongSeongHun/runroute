@@ -274,8 +274,12 @@ if(!S.v){S.engine="local";S.v=2;save("settings",S);}  /* v2: 로컬 도로망 �
 /* ---------- routing engines (rate-limited) ---------- */
 let lastCall = 0;
 async function throttle(){const w=1100-(Date.now()-lastCall); if(w>0) await sleep(w); lastCall=Date.now();}
+/* 외부 엔진(OSRM·GraphHopper)은 통행 불가 구간을 모름 → 결과를 검사해 지나가면 우회 지점을 넣어 다시 계산 */
 async function route(pts,opt={}){
   if(S.engine==="local"&&GRAPH&&pts.every(p=>inBox(GRAPH.box,p))){await sleep(0);return detour(routeLocal(pts,opt),opt);}
+  return avoidBlocks(await routeNet(pts,opt),opt);
+}
+async function routeNet(pts,opt={}){
   await throttle();
   if(S.engine==="gh"){
     if(!S.ghKey) throw new Error("GraphHopper API 키를 설정에 입력해 주세요.");
@@ -296,6 +300,39 @@ async function route(pts,opt={}){
   if(opt.steps) out.ix=j.routes[0].legs.flatMap(l=>l.steps.flatMap(st=>(st.intersections||[]).map(x=>({loc:[x.location[1],x.location[0]],b:x.bearings,inn:x.in}))));
   return detour(out,opt);
 }
+/* ---------- 통행 불가 구간 검사(좌표 기준, 엔진 무관) ----------
+   line: 선에서 r+5m 이내 지점 / poly: 다각형 안 지점(외부 엔진은 도로 종류를 모르므로 다각형 전체를 보수적으로 차단) */
+function blockGeo(){if(blockGeo.c)return blockGeo.c;const lat0=10.73,ky=111195,kx=ky*Math.cos(rad(lat0)),xy=p=>[(p[1]-106.7)*kx,(p[0]-lat0)*ky];
+  return blockGeo.c=BLOCKS.map(b=>{const L=b.line?b.line.map(xy):null,P=b.poly?b.poly.map(xy):null,all=(L||P);
+    const cx=all.reduce((a,q)=>a+q[0],0)/all.length,cy=all.reduce((a,q)=>a+q[1],0)/all.length,R=Math.max(...all.map(q=>Math.hypot(q[0]-cx,q[1]-cy)))+(b.r||0);
+    return {...b,L,P,cx,cy,R,xy,kx,ky,lat0};});}
+/* 로컬 도로망에서 차단되지 않은 길 위의 점이면 다각형 차단(산책로 한정)과 무관 */
+function graphOK(coords,i){const g=GRAPH;if(!g||!g.blk)return false;if(!g.ll2i){g.ll2i=new Map();for(let k=0;k<g.n;k++)g.ll2i.set(g.la[k]+","+g.lo[k],k);}
+  const u=g.ll2i.get(coords[i][0]+","+coords[i][1]);if(u==null)return false;
+  for(const j of [i-1,i+1]){if(j<0||j>=coords.length)continue;const v=g.ll2i.get(coords[j][0]+","+coords[j][1]);if(v==null)continue;
+    for(let e=g.off[u];e<g.off[u+1];e++)if(g.to[e]===v)return !g.blk[e];}
+  return false;}
+function blockHit(coords){const B=blockGeo();if(!B.length||coords.length<2)return null;const xy=B[0].xy;
+  const sd=(px,py,ax,ay,bx,by)=>{const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy;let t=L?((px-ax)*dx+(py-ay)*dy)/L:0;t=Math.max(0,Math.min(1,t));return Math.hypot(ax+t*dx-px,ay+t*dy-py);};
+  const inP=(x,y,P)=>{let c=false;for(let i=0,j=P.length-1;i<P.length;j=i++){const [xi,yi]=P[i],[xj,yj]=P[j];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))c=!c;}return c;};
+  let i0=-1,i1=-1,blk=null;
+  for(let i=0;i<coords.length;i++){const [x,y]=xy(coords[i]);let h=null;
+    for(const b of B){if(Math.hypot(x-b.cx,y-b.cy)>b.R+20)continue;
+      if(b.L){let m=Infinity;for(let k=1;k<b.L.length;k++)m=Math.min(m,sd(x,y,b.L[k-1][0],b.L[k-1][1],b.L[k][0],b.L[k][1]));if(m<=b.r+5)h=b;}
+      else if(b.P&&inP(x,y,b.P)&&!graphOK(coords,i))h=b;if(h)break;}
+    if(h){if(i0<0){i0=i;blk=h;}i1=i;}else if(i0>=0&&i-i1>3)break;}
+  return i0<0?null:{i0,i1,blk};}
+async function avoidBlocks(r,opt={}){
+  for(let t=0;t<4;t++){const h=blockHit(r.coords);if(!h)return r;
+    const c=r.coords,cd=cumDist(c);let a=h.i0,b=h.i1;while(a>0&&cd[h.i0]-cd[a]<250)a--;while(b<c.length-1&&cd[b]-cd[h.i1]<250)b++;
+    const P=c[a],Q=c[b],B=h.blk,toLL=(x,y)=>[B.lat0+y/B.ky,106.7+x/B.kx],cands=[];
+    for(let k=0;k<12;k++){const an=k*Math.PI/6;cands.push(toLL(B.cx+(B.R+300)*Math.sin(an),B.cy+(B.R+300)*Math.cos(an)));}
+    cands.sort((u,v)=>(hav(P,u)+hav(u,Q))-(hav(P,v)+hav(v,Q)));let ok=false;
+    for(const via of cands.slice(0,6)){let s2;try{s2=await routeNet([P,via,Q],{});}catch(e){continue;}
+      if(!blockHit(s2.coords)){const nc=c.slice(0,a).concat(s2.coords,c.slice(b+1));r={...r,coords:nc,dist:cumDist(nc).at(-1)};ok=true;break;}}
+    if(!ok)throw new Error("공사(통행 불가) 구간을 피하는 경로를 찾지 못했습니다. 출발·도착지를 옮겨 다시 시도해 주세요.");}
+  if(blockHit(r.coords))throw new Error("공사(통행 불가) 구간을 피하는 경로를 찾지 못했습니다.");
+  return r;}
 /* 모든 엔진 결과에 우회 정리 적용 → 거리 보정(fit/fitAdd/cleanup)도 정리된 거리 기준 */
 function detour(out,opt){
   if(!S.cut||opt.cs===false||opt.nocut) return out;
@@ -536,7 +573,7 @@ const BIG_W=1.8, ORANGE_W=4; /* ≥1.8 노랑(secondary) · ≥4 주황(primary/
 /* 주황 도로 횡단: 건널목(highway=crossing·footway=crossing)·신호등(traffic_signals) 노드에서만.
    그 외 지점에서 옆길→주황 도로 노드로 진입하면 XING_PEN(m 환산) 가산 → 사실상 건널목으로 우회. 건널목이 아예 없으면 최후 수단으로 허용 */
 const XING_PEN=1200;  /* 실측(푸미흥 7구간): 0→주황40%·무단횡단23, 1200→5.9%·9, 2500→12.4%·6(건널목까지 큰길을 걷게 됨) */
-const OVERPASS_EP=["https://overpass-api.de/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+const OVERPASS_EP=["https://overpass-api.de/api/interpreter","https://overpass.private.coffee/api/interpreter","https://maps.mail.ru/osm/tools/overpass/api/interpreter"];  /* OSM 위키 공개 인스턴스 3곳 */
 let GRAPH=null;
 function boxAround(c,r){const dLa=r/111195,dLo=r/(111195*Math.cos(rad(c[0])));return [c[0]-dLa,c[1]-dLo,c[0]+dLa,c[1]+dLo];}
 function inBox(b,p){return p[0]>=b[0]&&p[0]<=b[2]&&p[1]>=b[1]&&p[1]<=b[3];}
@@ -1153,6 +1190,8 @@ async function generate(newSeed){
       }
       if(!best)throw lastErr||new Error("경로를 만들지 못했습니다.");
       res=best.r;}
+    /* 최종 안전검사: 어떤 생성 방식이든 통행 불가 구간 통과 금지 */
+    if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     res.coords=thin(res.coords); res.fam=familiar(res.coords);
     if(!res.sketch){res.ut=badUturns(res.coords,res.ref,res.turn?[res.turn]:[]).length; if(res.key) lastRef=res.key;}
     cur=res; draw(res);
