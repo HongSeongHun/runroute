@@ -142,6 +142,13 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
         <label class="lbl" for="dist" id="distLbl">목표 거리 (km)</label>
         <input id="dist" type="number" inputmode="decimal" min="1" max="60" step="0.5" value="10">
       </div>
+      <div id="styleBox">
+        <label class="lbl" for="rstyle">경로 스타일</label>
+        <select id="rstyle">
+          <option value="local">동네 골목 (출발지 근처 흰 도로)</option>
+          <option value="wide">넓게 한 바퀴</option>
+        </select>
+      </div>
       <div id="dirBox">
         <label class="lbl" for="dir">출발 방향</label>
         <select id="dir">
@@ -691,6 +698,67 @@ async function genSketch(A,maxD,shape,onStep){
   return {coords,total,err:(total-maxD)/maxD,sketch:{label:shape.label,tag:shape.tag,fid:b.t.fid,th:b.t.cand.th,
     ideal:sampXY(b.t.W,15).map(q=>toLL(g,q)),main:b.t.ll,legs:[b.L.a,b.L.b],maxD,approach:b.L.len,size:Math.round(b.t.cand.s*gp.h)}};
 }
+/* ---------- 동네 골목 루프 (Neighborhood walk) ----------
+   출발지 근처 흰 도로를 촘촘히 훑는 경로. 끝점까지 남은 최단거리(distField)를 예산으로 두고,
+   안 지나간 흰 골목 우선 · 출발지에서 멀어지면 감점 · U턴/막다른 길 감점 · 주황 도로는 건널목에서만 가로지르기(따라 걷기 금지).
+   무작위 시도 수십 회 → 거리 오차·새 길 비율·흰 도로 비율·반경으로 채점해 최선 선택 */
+function stepOK(g,e,v){const w=g.wt[e];if(w>=ORANGE_W)return g.len[e]<=45;return !(g.np[v]>0);}
+function distField(g,s,lim){const n=g.n,d=new Float64Array(n).fill(Infinity),H=[],F=[];
+  const push=(v,f)=>{H.push(v);F.push(f);let i=H.length-1;while(i>0){const p=(i-1)>>1;if(F[p]<=F[i])break;let z=H[p];H[p]=H[i];H[i]=z;z=F[p];F[p]=F[i];F[i]=z;i=p;}};
+  const pop=()=>{const v=H[0],lv=H.pop(),lf=F.pop();if(H.length){H[0]=lv;F[0]=lf;let i=0;for(;;){const l=2*i+1,r=l+1;let m=i;if(l<H.length&&F[l]<F[m])m=l;if(r<H.length&&F[r]<F[m])m=r;if(m===i)break;let z=H[m];H[m]=H[i];H[i]=z;z=F[m];F[m]=F[i];F[i]=z;i=m;}}return v;};
+  d[s]=0;push(s,0);while(H.length){const f=F[0],u=pop();if(f>d[u])continue;if(f>lim)break;
+    for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(!stepOK(g,e,u))continue; /* 역방향 탐색: v→u 이동이 허용돼야 함 */
+      const nd=f+g.len[e];if(nd<d[v]){d[v]=nd;push(v,nd);}}}
+  return d;}
+/* 막다른 가지 전체 표시: 차수 1 노드를 반복 제거(2-core) → 제거된 노드 = 들어갔다 되돌아와야 하는 곳 */
+function deadEnds(g){if(g.dead)return g.dead;const n=g.n,dg=new Int32Array(n),dead=new Uint8Array(n),q=[];
+  const nb=u=>{const s=new Set();if(g.np[u]>0)return s;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(g.np[v]>0||(g.wt[e]>=ORANGE_W&&g.len[e]>45))continue;s.add(v);}return s;};
+  for(let u=0;u<n;u++){dg[u]=nb(u).size;if(dg[u]<=1){dead[u]=1;q.push(u);}}
+  while(q.length){const u=q.pop();nb(u).forEach(v=>{if(!dead[v]&&--dg[v]<=1){dead[v]=1;q.push(v);}});}
+  return g.dead=dead;}
+function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng){
+  const vis=new Map(),nv=new Map(),path=[sN],dead=deadEnds(g);let cur=sN,prev=-1,trav=0,guard=0;nv.set(sN,1);
+  const key=(a,b)=>a<b?a*1e6+b:b*1e6+a;
+  while(guard++<20000){if(cur===eN&&trav>=target*0.99)break;if(trav+dE[cur]>=target*0.99&&cur!==sN)break;
+    let best=-1,be=-1,bs=-Infinity;
+    for(let e=g.off[cur];e<g.off[cur+1];e++){const v=g.to[e];if(!stepOK(g,e,v)||!isFinite(dE[v]))continue;
+      const L=g.len[e];if(trav+L+dE[v]>target*1.02)continue;
+      const c=vis.get(key(cur,v))||0;let sc=-c*3-(g.wt[e]-1)*2;
+      if(v===prev)sc-=4;
+      if(dead[v]&&!dead[cur]&&v!==eN)sc-=8;          /* 막다른 가지 진입 금지 수준 */
+      sc-=(nv.get(v)||0)*1.2;                          /* 지나간 교차로 재방문(매듭) 감점 */
+      const r=Math.hypot(g.x[v]-cx,g.y[v]-cy);if(r>R0)sc-=(r-R0)/120;
+      if(prev>=0){const a1=Math.atan2(g.x[cur]-g.x[prev],g.y[cur]-g.y[prev]),a2=Math.atan2(g.x[v]-g.x[cur],g.y[v]-g.y[cur]);let da=Math.abs(a2-a1);if(da>Math.PI)da=2*Math.PI-da;sc-=0.4*da/Math.PI;}
+      sc+=rng()*1.2;
+      if(sc>bs){bs=sc;best=v;be=e;}}
+    if(best<0)break;
+    vis.set(key(cur,best),(vis.get(key(cur,best))||0)+1);trav+=g.len[be];prev=cur;cur=best;path.push(cur);nv.set(cur,(nv.get(cur)||0)+1);}
+  /* 남은 구간: 끝점까지 최단경로 (dE 내리막) */
+  let g2=0;while(cur!==eN&&g2++<5000){let bv=-1,be=-1,bd=Infinity;
+    for(let e=g.off[cur];e<g.off[cur+1];e++){const v=g.to[e];if(!stepOK(g,e,v))continue;const d=g.len[e]+dE[v];if(d<bd){bd=d;bv=v;be=e;}}
+    if(bv<0)return null;vis.set(key(cur,bv),(vis.get(key(cur,bv))||0)+1);trav+=g.len[be];cur=bv;path.push(cur);}
+  if(cur!==eN)return null;
+  let uniq=0,white=0,maxR=0;vis.forEach((c,k)=>{});
+  const seen=new Set();for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],k=key(a,b);let L=0,w=1;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){L=g.len[e];w=g.wt[e];break;}
+    if(!seen.has(k)){seen.add(k);uniq+=L;}if(w<BIG_W)white+=L;maxR=Math.max(maxR,Math.hypot(g.x[b]-cx,g.y[b]-cy));}
+  return {path,trav,uniq:uniq/trav,white:white/trav,maxR};}
+function genWalk(A,E,target,onStep){
+  const g=GRAPH;if(!g||!inBox(g.box,A)||(E&&!inBox(g.box,E)))return null;
+  const sN=nearestNode(g,A,300),eN=E?nearestNode(g,E,300):sN;if(sN<0||eN<0)return null;
+  const dE=distField(g,eN,target*1.1);if(!isFinite(dE[sN]))return null;
+  if(E&&dE[sN]>target*0.97)return null;  /* 최단거리만으로 목표 이상 → 기존 방식 */
+  const cx=E?(g.x[sN]+g.x[eN])/2:g.x[sN],cy=E?(g.y[sN]+g.y[eN])/2:g.y[sN];
+  const R0=Math.max(350,Math.min(1500,target/12))+(E?Math.hypot(g.x[sN]-g.x[eN],g.y[sN]-g.y[eN])/2:0);
+  let best=null;const seed=(Date.now()^(Math.random()*1e9))|0;
+  for(let k=0;k<40;k++){const w=walkOnce(g,sN,eN,target,dE,cx,cy,R0,mulberry(seed+k*7919));if(!w)continue;
+    const err=Math.abs(w.trav-target)/target;
+    w.ut=typeof uturns==="function"?uturns(w.path.map(i=>[g.la[i],g.lo[i]])).length:0;
+    w.sc=err*6+(1-w.uniq)*1.5+(1-w.white)*2+Math.max(0,w.maxR-R0)/R0*0.5+w.ut*0.12;
+    if(!best||w.sc<best.sc)best=w;}
+  if(!best)return null;
+  const coords=best.path.map(i=>[g.la[i],g.lo[i]]),total=cumDist(coords).at(-1);
+  return {coords,total,err:(total-target)/target,walk:{uniq:best.uniq,white:best.white,R:Math.round(best.maxR)}};}
 /* ===== END local-graph ===== */
 
 /* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
@@ -797,6 +865,7 @@ document.querySelectorAll("#mode button").forEach(b=>b.onclick=()=>{
   state.mode=b.dataset.mode;save("mode",state.mode);
   document.querySelectorAll("#mode button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
   const sk=state.mode==="sketch"; $("#sketchBox").hidden=!sk; $("#dirBox").hidden=sk; $("#libRow").hidden=sk;
+  $("#styleBox").hidden=!(state.mode==="loop"||state.mode==="a2b");
   $("#distLbl").textContent=sk?"최대 거리 (km)":"목표 거리 (km)";
   $("#ptB").hidden=state.mode!=="a2b"; if(mB) (state.mode==="a2b"?mB.addTo(map):mB.remove());
   const pb=document.querySelector('.picker [data-p="B"]'); if(pb) pb.hidden=state.mode!=="a2b";
@@ -845,7 +914,7 @@ function draw(res){
   if(res.sketch) refLine=L.polyline(res.sketch.ideal,{color:"#1a56db",weight:4,opacity:.75,dashArray:"8 6",interactive:false}).addTo(map);
   else if(res.ref) refLine=L.polyline(res.ref.track,{color:"#5b6b67",weight:3,opacity:.55,dashArray:"6 6",interactive:false}).addTo(map);
   const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
-  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
+  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 경로 (출발지 반경 "+res.walk.R+"m · 새 길 "+Math.round(res.walk.uniq*100)+"% · 흰 도로 "+Math.round(res.walk.white*100)+"%)":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
   {const st=routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
     res._xp=st.xp;}}
@@ -900,10 +969,17 @@ async function generate(newSeed){
       status("도로망 불러오는 중…");try{await loadGraph(ctr,Math.min(need,3000));}catch(e){status(e.message+" OSRM으로 계산합니다.");}
     }
     if(state.mode==="sketch") res=await genSketch(state.A,target,shape,step);
-    else if($("#useLib").checked&&LIB.length&&!(state.mode==="a2b"&&hav(state.A,state.B)<150))
+    else if($("#useLib").checked&&LIB.length&&!(state.mode==="a2b"&&hav(state.A,state.B)<150)&&!(S.engine==="local"&&$("#rstyle").value==="local"&&(state.mode==="loop"||state.mode==="a2b")))
       res=await genRef(state.mode,state.A,state.B,target,step);
     if(res) ;
     else{
+      if(S.engine==="local"&&$("#rstyle").value==="local"&&(state.mode==="loop"||state.mode==="a2b")){
+        step("동네 골목 경로 탐색",0);await sleep(0);
+        const w=genWalk(state.A,state.mode==="a2b"?state.B:null,target,step);
+        if(w&&Math.abs(w.err)<=0.05){res=w;}
+      }
+    }
+    if(!res){
       /* 흰 도로 우선: 로컬 엔진이면 방향을 바꾼 후보 최대 4개 → 주황·노랑 비율·무단횡단·거리오차가 가장 낮은 경로 */
       const once=(b,sd)=>state.mode==="loop"?genLoop(state.A,target,b,sd,step):state.mode==="outback"?genOutBack(state.A,target,b,step):genA2B(state.A,state.B,target,sd,step);
       const N=S.engine==="local"&&GRAPH&&inBox(GRAPH.box,state.A)?4:1;let best=null,lastErr=null;
@@ -947,7 +1023,7 @@ $("#share").onclick=async()=>{if(!cur)return;const f=fileOf("tcx");
 /* settings */
 $("#engine").value=S.engine;$("#osrmBase").value=S.osrmBase;$("#ghKey").value=S.ghKey;
 ["engine","osrmBase","ghKey"].forEach(k=>$("#"+k).addEventListener("change",e=>{S[k]=e.target.value.trim();save("settings",S);}));
-$("#cut").checked=!!S.cut; $("#cut").addEventListener("change",e=>{S.cut=e.target.checked;save("settings",S);});
+$("#cut").checked=!!S.cut; $("#rstyle").value=load("rstyle","local"); $("#rstyle").addEventListener("change",e=>save("rstyle",e.target.value)); $("#cut").addEventListener("change",e=>{S.cut=e.target.checked;save("settings",S);});
 
 /* pace: type digits only, 710 -> 7:10 */
 const paceEl=$("#pace"); paceEl.value=load("pace","5:30");
