@@ -194,7 +194,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       <summary>선호 경로 (달리기 좋은 곳)</summary>
       <div class="inner">
         <span class="note">빨간 선 근처(25m) 흰·노랑 도로를 선호합니다. 동네 골목 스타일에서 목표 10km 이상이면 거리 안에서 가까운 곳부터 반드시 포함합니다.</span>
-        <label class="chk"><input type="checkbox" id="prefShow" checked> 지도에 표시</label>
+        <label class="chk"><input type="checkbox" id="prefShow"> 지도에 표시 (기본 꺼짐)</label>
         <label class="chk"><input type="checkbox" id="prefSeed"> 기본 선호 경로 사용 (푸미흥·떤미·푸투언, 2026-10-29 표시)</label>
         <div class="actions">
           <button class="btn" type="button" id="prefDraw">지도에 그리기</button>
@@ -1175,7 +1175,7 @@ $("#prefDraw").onclick=()=>setPrefDraw(!prefDrawing);
 $("#prefUndo").onclick=()=>{const st=prefState();(st.strokes||[]).pop();save("pref",st);renderPref();};
 $("#prefClear").onclick=()=>{const st=prefState();if(!(st.strokes||[]).length)return;st.strokes=[];save("pref",st);renderPref();};
 $("#prefSeed").onchange=e=>{const st=prefState();st.seed=e.target.checked;save("pref",st);renderPref();};
-$("#prefShow").onchange=()=>renderPref();
+$("#prefShow").checked=load("prefShow",false);$("#prefShow").onchange=e=>{save("prefShow",e.target.checked);renderPref();};
 renderPref();
 /* 설정 링크: …/runroute/#rr-relay=<주소>&rr-key=<키> → 저장 후 주소창에서 즉시 제거 */
 (()=>{const h=new URLSearchParams(location.hash.slice(1));if(h.has("rr-relay")&&h.has("rr-key")){S.relayUrl=h.get("rr-relay");S.relayKey=h.get("rr-key");save("settings",S);
