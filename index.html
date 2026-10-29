@@ -1128,10 +1128,10 @@ $("#dlGpx").onclick=()=>download("gpx");
 /* Garmin 공유: Mac 중계 서버(Tailscale) → Garmin Connect 코스 생성(공개) → 링크 팝업 */
 async function garminShare(){
   const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
-  if(!base||!key){status("설정 → Garmin 중계 주소·키를 먼저 입력해 주세요. (TCX 파일 공유로 대체)",true);const f=fileOf("tcx");
-    if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:f.name});}catch(e){}}else download("tcx");return;}
-  lnk.value="";["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=true);msg.textContent="Garmin에 공개 코스로 등록 중…";
+  lnk.value="";["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=true);
   if(d.showModal)d.showModal();else d.setAttribute("open","");
+  if(!base||!key){msg.textContent="Garmin 중계 설정이 없습니다. Mac에서 만든 '설정 링크'를 이 앱에서 한 번 열거나, 경로 엔진 설정 → Garmin 중계 주소·키를 입력해 주세요. (파일 공유는 하지 않습니다)";return;}
+  msg.textContent="Garmin에 공개 코스로 등록 중…";
   try{const name=courseName(),r=await fetch(base+"/course",{method:"POST",headers:{"Content-Type":"application/json","X-RR-Key":key},
       body:JSON.stringify({name,gpx:toGPX(name,cur.coords),public:true})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
@@ -1148,13 +1148,20 @@ $("#gsend").onclick=async()=>{const v=$("#glink").value;if(v&&navigator.share){t
 
 /* settings */
 $("#engine").value=S.engine;$("#osrmBase").value=S.osrmBase;$("#ghKey").value=S.ghKey;
-["engine","osrmBase","ghKey","relayUrl","relayKey"].forEach(k=>{const el=$("#"+k);if(S[k]!=null&&k.startsWith("relay"))el.value=S[k];el.addEventListener("change",e=>{S[k]=e.target.value.trim();save("settings",S);});});
+["engine","osrmBase","ghKey","relayUrl","relayKey"].forEach(k=>{const el=$("#"+k);if(S[k]!=null&&k.startsWith("relay"))el.value=S[k];el.addEventListener("change",e=>{let v=e.target.value.trim();
+  /* 설정 링크 통째로 붙여넣기 허용(홈 화면 앱용): …#rr-relay=…&rr-key=… */
+  if(k.startsWith("relay")&&v.includes("rr-key=")){const h=new URLSearchParams(v.slice(v.indexOf("#")+1));if(h.get("rr-relay")&&h.get("rr-key")){S.relayUrl=h.get("rr-relay");S.relayKey=h.get("rr-key");save("settings",S);$("#relayUrl").value=S.relayUrl;$("#relayKey").value=S.relayKey;status("Garmin 중계 설정을 저장했습니다.");return;}}
+  S[k]=v;save("settings",S);});});
 $("#prefDraw").onclick=()=>setPrefDraw(!prefDrawing);
 $("#prefUndo").onclick=()=>{const st=prefState();(st.strokes||[]).pop();save("pref",st);renderPref();};
 $("#prefClear").onclick=()=>{const st=prefState();if(!(st.strokes||[]).length)return;st.strokes=[];save("pref",st);renderPref();};
 $("#prefSeed").onchange=e=>{const st=prefState();st.seed=e.target.checked;save("pref",st);renderPref();};
 $("#prefShow").onchange=()=>renderPref();
 renderPref();
+/* 설정 링크: …/runroute/#rr-relay=<주소>&rr-key=<키> → 저장 후 주소창에서 즉시 제거 */
+(()=>{const h=new URLSearchParams(location.hash.slice(1));if(h.has("rr-relay")&&h.has("rr-key")){S.relayUrl=h.get("rr-relay");S.relayKey=h.get("rr-key");save("settings",S);
+  $("#relayUrl").value=S.relayUrl;$("#relayKey").value=S.relayKey;history.replaceState(null,"",location.pathname+location.search);
+  setTimeout(()=>status("Garmin 중계 설정을 저장했습니다. 이제 'Garmin 공유'를 사용할 수 있습니다."),300);}})();
 $("#cut").checked=!!S.cut; $("#rstyle").value=load("rstyle","local"); $("#rstyle").addEventListener("change",e=>save("rstyle",e.target.value)); $("#cut").addEventListener("change",e=>{S.cut=e.target.checked;save("settings",S);});
 
 /* pace: type digits only, 710 -> 7:10 */
