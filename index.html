@@ -782,12 +782,20 @@ const WALK_CLS={residential:0,living_street:0,unclassified:0,tertiary:0,tertiary
 function walkCls(g){if(g.wcls)return g.wcls;const m=g.off[g.n],a=new Float32Array(m);/* buildGraph에 way 태그가 없으므로 가중치로 역추정 불가 → 별도 배열 사용 */
   if(g.ecls){for(let e=0;e<m;e++)a[e]=WALK_CLS[g.ecls[e]]??0.5;}return g.wcls=a;}
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+/* 되짚기 감지: 30m 격자에 진행 방향(45° 8칸)을 기록 → 같은 길(또는 왕복 차로가 따로 그려진 평행 차로)을 반대로 지나면 감지 */
+const DCELL=30;
+function dirBin(g,u,v){const a=Math.atan2(g.x[v]-g.x[u],g.y[v]-g.y[u]);return ((Math.round(a/(Math.PI/4))%8)+8)%8;}
+function edgeCells(g,u,v){const L=Math.hypot(g.x[v]-g.x[u],g.y[v]-g.y[u]),n=Math.max(1,Math.ceil(L/15)),o=[];for(let k=0;k<=n;k++){const f=k/n;o.push(Math.floor((g.x[u]+(g.x[v]-g.x[u])*f)/DCELL)+","+Math.floor((g.y[u]+(g.y[v]-g.y[u])*f)/DCELL));}return o;}
+function markDir(g,dm,u,v){const b=1<<dirBin(g,u,v);for(const k of edgeCells(g,u,v))dm.set(k,(dm.get(k)||0)|b);}
+function oppFrac(g,dm,u,v){const ob=(dirBin(g,u,v)+4)%8,m=(1<<ob)|(1<<((ob+1)%8))|(1<<((ob+7)%8)),cs=edgeCells(g,u,v);let h=0;
+  for(const k of cs){let hit=false;const [cx,cy]=k.split(",").map(Number);for(let dx=-1;dx<=1&&!hit;dx++)for(let dy=-1;dy<=1&&!hit;dy++)if((dm.get((cx+dx)+","+(cy+dy))||0)&m)hit=true;if(hit)h++;}
+  return h/cs.length;}
 function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng,P){
-  const vis=new Map(),nv=new Map(),path=[sN],dead=deadEnds(g),wc=walkCls(g);let cur=sN,prev=-1,trav=0,guard=0;nv.set(sN,1);
+  const vis=new Map(),nv=new Map(),dvis=new Set(),dm=new Map(),path=[sN],dead=deadEnds(g),wc=walkCls(g);let cur=sN,prev=-1,trav=0,guard=0;nv.set(sN,1);
   const key=(a,b)=>a<b?a*1e6+b:b*1e6+a,goals=P?P.goals:[],cov=new Map();let gi=0,reached=false,offPref=0;
   /* 다음 조각으로: 60% 달렸거나, 도착 후 선호 도로를 150m 이상 벗어났을 때 */
   const goal=()=>{while(gi<goals.length&&((cov.get(goals[gi].id)||0)>=goals[gi].L*PREF_COV||(reached&&offPref>150))){gi++;reached=false;offPref=0;}return goals[gi]||null;};
-  while(guard++<20000){if(cur===eN&&trav>=target*0.99)break;if(trav+dE[cur]>=target*0.99&&cur!==sN)break;
+  while(guard++<20000){if(cur===eN&&trav>=target*0.99)break;if(trav+dE[cur]*1.12>=target*0.99&&cur!==sN)break;
     const G=goal(),toZone=G&&G.dZ[cur]>0;
     let best=-1,be=-1,bs=-Infinity,ref=-1;
     if(path.length>1){let d=0;for(let q=path.length-1;q>0;q--){d+=Math.hypot(g.x[path[q]]-g.x[path[q-1]],g.y[path[q]]-g.y[path[q-1]]);ref=path[q-1];if(d>=30)break;}}
@@ -797,7 +805,8 @@ function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng,P){
       if(pe&&!c)sc+=G?5:3;                               /* 선호 도로(처음) 가산 */
       if(G&&isFinite(G.dZ[v]))sc+=(G.dZ[cur]-G.dZ[v])/(toZone?10:40);   /* 선호 구역 쪽으로 끌림 */
       if(v===prev)sc-=4;
-      if(dead[v]&&!dead[cur]&&v!==eN&&!pe)sc-=8;         /* 막다른 가지 진입 금지 수준 */
+      if(dvis.has(v+">"+cur))sc-=8;else{const of=oppFrac(g,dm,cur,v);if(of>0.3)sc-=5*of;}   /* 같은 길·평행 차로 반대 방향 되짚기 금지 수준 */
+      if(dead[v]&&!dead[cur]&&v!==eN)sc-=8;            /* 막다른 가지(선호 도로 포함) 진입 금지 수준 */         /* 막다른 가지 진입 금지 수준 */
       sc-=(nv.get(v)||0)*0.3;
       if(!toZone){let r=Math.hypot(g.x[v]-cx,g.y[v]-cy)-R0;if(P)for(const z of P.goals)r=Math.min(r,Math.hypot(g.x[v]-z.cx,g.y[v]-z.cy)-z.R-150);if(r>0)sc-=r/120;}
       if(ref>=0){const a1=Math.atan2(g.x[cur]-g.x[ref],g.y[cur]-g.y[ref]),a2=Math.atan2(g.x[v]-g.x[cur],g.y[v]-g.y[cur]);let da=Math.abs(a2-a1);if(da>Math.PI)da=2*Math.PI-da;
@@ -808,18 +817,19 @@ function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng,P){
     const k0=key(cur,best),first=!vis.has(k0);
     if(first&&P&&P.pref[be]){const z=P.edgeZone[be];if(z>=0)cov.set(z,(cov.get(z)||0)+g.len[be]);}
     if(G){if(G.dZ[best]===0)reached=true;if(reached)offPref=P.pref[be]?0:offPref+g.len[be];}
-    vis.set(k0,(vis.get(k0)||0)+1);trav+=g.len[be];prev=cur;cur=best;path.push(cur);nv.set(cur,(nv.get(cur)||0)+1);}
-  /* 남은 구간: 끝점까지 최단경로 (dE 내리막) */
-  let g2=0;while(cur!==eN&&g2++<5000){let bv=-1,be=-1,bd=Infinity;
-    for(let e=g.off[cur];e<g.off[cur+1];e++){const v=g.to[e];if(!stepOK(g,e,v))continue;const d=g.len[e]+dE[v];if(d<bd){bd=d;bv=v;be=e;}}
-    if(bv<0)return null;const k0=key(cur,bv);if(!vis.has(k0)&&P&&P.pref[be]){const z=P.edgeZone[be];if(z>=0)cov.set(z,(cov.get(z)||0)+g.len[be]);}
-    vis.set(k0,(vis.get(k0)||0)+1);trav+=g.len[be];cur=bv;path.push(cur);}
+    vis.set(k0,(vis.get(k0)||0)+1);dvis.add(cur+">"+best);markDir(g,dm,cur,best);trav+=g.len[be];prev=cur;cur=best;path.push(cur);nv.set(cur,(nv.get(cur)||0)+1);}
+  /* 남은 구간: 끝점까지, 이미 지난 길을 반대로 되짚지 않는 경로(A*, 되짚기 비용 가산) */
+  if(cur!==eN){const hp=astar(g,cur,eN,(u,v)=>dvis.has(v+">"+u)?3:(oppFrac(g,dm,u,v)>0.3?2:0));if(!hp)return null;
+    for(let q=1;q<hp.length;q++){const a=hp[q-1],b=hp[q];let be=-1;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){be=e;break;}if(be<0)return null;
+      const k0=key(a,b);if(!vis.has(k0)&&P&&P.pref[be]){const z=P.edgeZone[be];if(z>=0)cov.set(z,(cov.get(z)||0)+g.len[be]);}
+      vis.set(k0,(vis.get(k0)||0)+1);trav+=g.len[be];cur=b;path.push(b);}}
   if(cur!==eN)return null;
-  let uniq=0,white=0,maxR=0,prefL=0;
+  let uniq=0,white=0,maxR=0,prefL=0,revL=0;const dm2=new Map();
   const seen=new Set();for(let i=1;i<path.length;i++){const a=path[i-1],b=path[i],k=key(a,b);let L=0,w=1,pe=0;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){L=g.len[e];w=g.wt[e];pe=P?P.pref[e]:0;break;}
-    if(!seen.has(k)){seen.add(k);uniq+=L;}if(w<BIG_W)white+=L;if(pe)prefL+=L;maxR=Math.max(maxR,Math.hypot(g.x[b]-cx,g.y[b]-cy));}
+    if(!seen.has(k)){seen.add(k);uniq+=L;}if(w<BIG_W)white+=L;if(pe)prefL+=L;maxR=Math.max(maxR,Math.hypot(g.x[b]-cx,g.y[b]-cy));
+    if(oppFrac(g,dm2,a,b)>0.5)revL+=L;markDir(g,dm2,a,b);}
   let short=0;for(const z of goals)short+=Math.max(0,z.L*PREF_COV-(cov.get(z.id)||0))/z.L;
-  return {path,trav,uniq:uniq/trav,white:white/trav,maxR,prefL,short,cov};}
+  return {path,trav,uniq:uniq/trav,white:white/trav,maxR,prefL,short,cov,rev:revL/trav};}
 /* 꺾는 횟수: 30m 전후 방향 차 ≥ 50° 인 지점(60m 내 중복 제외) */
 function countTurns(g,path){const P=path.map(i=>[g.x[i],g.y[i]]),cd=[0];for(let i=1;i<P.length;i++)cd.push(cd[i-1]+Math.hypot(P[i][0]-P[i-1][0],P[i][1]-P[i-1][1]));
   let t=0,last=-1e9,j0=0,j1=0;for(let i=1;i<P.length-1;i++){while(cd[i]-cd[j0]>30)j0++;while(j1<P.length-1&&cd[j1]-cd[i]<30)j1++;if(j0>=i||j1<=i)continue;
@@ -849,12 +859,12 @@ function genWalk(A,E,target,onStep){
     const err=Math.abs(w.trav-target)/target;
     w.ut=typeof uturns==="function"?uturns(w.path.map(i=>[g.la[i],g.lo[i]])).length:0;
     w.turns=countTurns(g,w.path);
-    w.sc=err*6+(1-w.white)*2+(P&&P.goals.length?0:Math.max(0,w.maxR-R0)/R0*0.5)+w.ut*0.15+w.turns/(target/1000)*0.25+(1-w.uniq)*0.3+w.short*4-w.prefL/target*1.5;
+    w.sc=err*6+(1-w.white)*2+(P&&P.goals.length?0:Math.max(0,w.maxR-R0)/R0*0.5)+w.ut*0.15+w.turns/(target/1000)*0.25+(1-w.uniq)*0.3+w.short*4-w.prefL/target*1.5+w.rev*12;   /* 되짚기 비율 강한 감점 */
     if(!best||w.sc<best.sc)best=w;}
   if(!best)return null;
   const coords=best.path.map(i=>[g.la[i],g.lo[i]]),total=cumDist(coords).at(-1);
   const zs=P?P.goals.map(z=>Math.round(Math.min(1,(best.cov.get(z.id)||0)/z.L)*100)):[];
-  return {coords,total,err:(total-target)/target,walk:{uniq:best.uniq,white:best.white,R:Math.round(best.maxR),turns:best.turns,pref:best.prefL/best.trav,zones:zs,zonesAll:PI.zones.length}};}
+  return {coords,total,err:(total-target)/target,walk:{uniq:best.uniq,white:best.white,rev:best.rev,R:Math.round(best.maxR),turns:best.turns,pref:best.prefL/best.trav,zones:zs,zonesAll:PI.zones.length}};}
 /* ===== END local-graph ===== */
 
 /* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
