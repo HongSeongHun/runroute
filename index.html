@@ -14,14 +14,14 @@
 /* Layout: map fills the screen, control sheet docks bottom on phone / left on desktop */
 :root{
   --bg:#f3f6f5; --panel:#ffffff; --fg:#14211e; --muted:#5b6b67; --line:#d9e2df;
-  --accent:#0f6b5c; --accent-fg:#ffffff; --route:#e2550f; --warn:#a15c00; --bad:#b3261e; --ok:#1f7a3f;
+  --accent:#0f6b5c; --accent-fg:#ffffff; --route:#6d28d9; --route-back:#0891b2; --warn:#a15c00; --bad:#b3261e; --ok:#1f7a3f;
   --f-body:"IBM Plex Sans KR",-apple-system,"Apple SD Gothic Neo",system-ui,sans-serif;
   --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#0e1513; --panel:#16201d; --fg:#e4ece9; --muted:#93a39e; --line:#2a3834;
-  --accent:#3fb39c; --accent-fg:#06201b; --route:#ff7a3d; --warn:#e3a54a; --bad:#ff8a80; --ok:#6fd38f;
+  --accent:#3fb39c; --accent-fg:#06201b; --route:#a78bfa; --route-back:#22d3ee; --warn:#e3a54a; --bad:#ff8a80; --ok:#6fd38f;
   color-scheme:dark;}}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0}
@@ -648,6 +648,22 @@ $("#locA").onclick=()=>locate(true);
 function status(t,err){const s=$("#status");s.textContent=t;s.classList.toggle("err",!!err);}
 function fmtTime(sec){const h=Math.floor(sec/3600),m=Math.round(sec%3600/60);return h?h+":"+String(m).padStart(2,"0"):m+"분";}
 
+/* 같은 길을 반대로 되돌아오는 구간: 앞서 지난 길 15m 이내 + 진행 방향이 120° 이상 반대 (10m 간격 샘플, 격자 인덱스) */
+function returnMask(c){
+  const n=c.length, mask=new Array(n).fill(false); if(n<3) return mask;
+  const cd=cumDist(c), P=[];
+  for(let i=1;i<n;i++){const a=c[i-1],b=c[i],L=cd[i]-cd[i-1],k=Math.max(1,Math.ceil(L/10)),br=bearing(a,b);
+    for(let s=0;s<k;s++){const f=(s+0.5)/k;P.push({p:[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],b:br,d:cd[i-1]+L*f,seg:i});}}
+  const G=0.00015, g=new Map(), key=(x,y)=>x+","+y;
+  P.forEach((q,idx)=>{const k=key(Math.floor(q.p[0]/G),Math.floor(q.p[1]/G));let a=g.get(k);if(!a)g.set(k,a=[]);a.push(idx);});
+  const hit=new Array(n).fill(0), cnt=new Array(n).fill(0);
+  for(const q of P){cnt[q.seg]++;const x=Math.floor(q.p[0]/G),y=Math.floor(q.p[1]/G);let r=false;
+    for(let dx=-1;dx<=1&&!r;dx++)for(let dy=-1;dy<=1&&!r;dy++){const a=g.get(key(x+dx,y+dy));if(!a)continue;
+      for(const j of a){const o=P[j];if(o.d>=q.d-60||hav(o.p,q.p)>15)continue;let db=Math.abs(o.b-q.b);if(db>180)db=360-db;if(db>=120){r=true;break;}}}
+    if(r)hit[q.seg]++;}
+  for(let i=1;i<n;i++) mask[i]=cnt[i]>0&&hit[i]/cnt[i]>=0.5;
+  return mask;
+}
 function draw(res){
   if(line) line.remove(); kmLayer.clearLayers();
   if(refLine){refLine.remove();refLine=null;}
@@ -657,7 +673,13 @@ function draw(res){
   const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
   ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=이상적인 모양) · 모양 일치도 "+Math.round(k.fid*100)+"% · 회전 "+k.th+"°"+(k.approach?" · 시작점까지 접근 "+(k.approach/1000).toFixed(1)+"km 포함":"")+" · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
-  line=L.polyline(res.coords,{color:getComputedStyle(document.documentElement).getPropertyValue("--route").trim()||"#e2550f",weight:5,opacity:.9}).addTo(map);
+  const css=getComputedStyle(document.documentElement), C1=css.getPropertyValue("--route").trim()||"#6d28d9", C2=css.getPropertyValue("--route-back").trim()||"#0891b2";
+  const back=returnMask(res.coords), hasBack=back.some(Boolean);
+  /* 보라 = 가는 길(전체). 되돌아오는 구간은 보라 위에 청록 가는 선 → 겹친 길에서 두 방향이 모두 보임 */
+  line=L.polyline(res.coords,{color:C1,weight:hasBack?7:5,opacity:.9}).addTo(map);
+  for(let i=1;i<back.length;i++){if(!back[i])continue;let j=i;while(j+1<back.length&&back[j+1])j++;
+    L.polyline(res.coords.slice(i-1,j+1),{color:C2,weight:3,opacity:1,interactive:false}).addTo(arrLayer);i=j;}
+  if(hasBack) ri.textContent+=" · 보라=가는 길, 청록=같은 길로 되돌아오는 구간";
   const cd=cumDist(res.coords); let next=1000;
   for(let i=1;i<cd.length;i++){while(cd[i]>=next){const f=(next-cd[i-1])/(cd[i]-cd[i-1]),a=res.coords[i-1],b=res.coords[i];
     L.marker([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],{icon:L.divIcon({className:"",html:'<span class="km-label">'+next/1000+'</span>',iconSize:null}),interactive:false}).addTo(kmLayer);next+=1000;}}
@@ -665,7 +687,7 @@ function draw(res){
   const tot=cd[cd.length-1],gap=Math.max(250,Math.min(800,tot/30)); let na=gap/2;
   for(let i=1;i<cd.length;i++){while(cd[i]>=na){const a=res.coords[i-1],b=res.coords[i],f=(na-cd[i-1])/((cd[i]-cd[i-1])||1);
     L.marker([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],{icon:L.divIcon({className:"",iconSize:[16,16],iconAnchor:[8,8],
-      html:'<div class="arr" style="transform:rotate('+bearing(a,b).toFixed(0)+'deg)"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 1.5 14 14 8 10.5 2 14Z" fill="#fff" stroke="#7a2a05" stroke-width="1.6" stroke-linejoin="round"/></svg></div>'}),interactive:false}).addTo(arrLayer);
+      html:'<div class="arr" style="transform:rotate('+bearing(a,b).toFixed(0)+'deg)"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 1.5 14 14 8 10.5 2 14Z" fill="'+(back[i]?C2:C1)+'" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg></div>'}),interactive:false}).addTo(arrLayer);
     na+=gap;}}
   map.fitBounds(line.getBounds(),{padding:[24,24]});
   $("#result").hidden=false;
