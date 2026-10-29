@@ -227,3 +227,29 @@ flowchart LR
 실측(S = Nguyễn Cao 남쪽): 8km 선호 2%(포함 안 함) · 10km 34~39% · 12km 36% · 15km 44~50% · 20km 54%, 모두 흰 도로 100%·주황 0%.
 한계: 북쪽 Hưng Thái 구간은 응우옌반린(주황) 건너편이라 건널목 데이터가 있는 지점으로만 건너므로 가까운 동쪽 구간이 먼저 채택됨. 선호 도로를 왕복하는 구간(청록)이 생길 수 있음.
 백업: `index.v10.html`.
+
+## v11 변경 (2026-10-29) — "Garmin 공유": 공개 코스 등록 + 링크 팝업 (개인용, Mac 중계)
+
+```mermaid
+flowchart LR
+  P[iPhone RunRoute<br/>Garmin 공유] -->|HTTPS · X-RR-Key| T[tailscale serve<br/>tailnet 내부 전용]
+  T --> R[Mac 중계 서버<br/>127.0.0.1:8787<br/>launchd 상시 실행]
+  R -->|~/.garminconnect 토큰| G[Garmin Connect<br/>코스 생성 rulePK=1]
+  R -->|코스 URL| P
+```
+- 공식 Courses API는 승인된 사업자 개발자 전용 → 개인용으로 Mac 중계 서버가 garmin_mcp와 같은 비공식 경로(`/course-service/course/import` → `/course-service/course`) 사용.
+- 공개 범위: `rulePK=1`로 생성 후 재조회해 확인(garmin_mcp는 2=비공개로 사용). 1=공개는 공식 문서 미확인 → 로그아웃 상태에서 링크로 1회 확인 권장.
+- 보안: 127.0.0.1 바인딩, tailnet 내부에서만 HTTPS, 헤더 키 `~/.runroute_relay_key`(600), CORS는 `https://hongseonghun.github.io`만 허용.
+- 파일: `relay/garmin_relay.py`(→ `~/.runroute/`), `relay/com.runroute.relay.plist`(→ `~/Library/LaunchAgents/`), 로그 `~/.runroute/relay.log`.
+- 앱 설정: 경로 엔진 설정 → Garmin 중계 주소(`https://<mac>.<tailnet>.ts.net`) · 중계 키. 미설정 시 기존 TCX 파일 공유로 대체.
+
+운영 명령(Mac):
+```bash
+launchctl print gui/$(id -u)/com.runroute.relay | grep state      # 상태
+launchctl kickstart -k gui/$(id -u)/com.runroute.relay             # 재시작
+tail -f ~/.runroute/relay.log                                      # 로그
+tailscale serve --bg 8787 && tailscale serve status                # HTTPS 노출(관리 화면에서 Serve 허용 필요)
+cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(유니버설 클립보드로 iPhone에 붙여넣기)
+```
+> ⚠️ 중지: `launchctl bootout gui/$(id -u)/com.runroute.relay` · `tailscale serve reset` (실행 전 영향 확인 — 공유 기능이 즉시 중단됨)
+백업: `index.v11.html`.

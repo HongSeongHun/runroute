@@ -85,6 +85,8 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .ref{font-size:12px;color:var(--muted);line-height:1.4}
 .arr{width:16px;height:16px;pointer-events:none}
 .arr svg{display:block}
+.gdlg{border:1px solid var(--line);border-radius:14px;padding:16px;background:var(--panel);color:var(--fg);width:min(92vw,420px);display:none;flex-direction:column;gap:10px}
+.gdlg[open]{display:flex}.gdlg::backdrop{background:rgba(0,0,0,.45)}.gdlg h2{font-size:16px;margin:0}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
@@ -182,7 +184,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       <div class="actions">
         <button class="btn" type="button" id="dlTcx">TCX 저장</button>
         <button class="btn" type="button" id="dlGpx">GPX 저장</button>
-        <button class="btn" type="button" id="share">공유</button>
+        <button class="btn" type="button" id="share">Garmin 공유</button>
       </div>
       <button class="btn" type="button" id="again">다른 경로 생성</button>
       <p class="note">Garmin Connect 웹 → 트레이닝 및 계획 → 코스 → 가져오기에서 TCX(권장) 또는 GPX를 올린 뒤 기기로 전송하세요.</p>
@@ -207,6 +209,10 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       <summary>경로 엔진 설정</summary>
       <div class="inner">
         <label class="chk"><input type="checkbox" id="cut"> 불필요한 우회 제거 (막다른 가지·블록 돌기)</label>
+        <label class="lbl" for="relayUrl">Garmin 중계 주소 (Mac, Tailscale)</label>
+        <input id="relayUrl" spellcheck="false" placeholder="https://macmini.<tailnet>.ts.net">
+        <label class="lbl" for="relayKey">중계 키</label>
+        <input id="relayKey" type="password" spellcheck="false" placeholder="Mac의 ~/.runroute_relay_key 값">
         <label class="lbl" for="engine">엔진</label>
         <select id="engine">
           <option value="local">로컬 도로망 (OSM, 흰 도로·보행로 우선, 권장)</option>
@@ -225,6 +231,17 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
   </section>
 </div>
 
+<dialog id="gdlg" class="gdlg">
+  <h2>Garmin 코스 공유</h2>
+  <p id="gmsg" class="note">Garmin에 공개 코스로 등록 중…</p>
+  <input id="glink" readonly placeholder="등록되면 링크가 표시됩니다">
+  <div class="actions">
+    <button class="btn" type="button" id="gcopy">링크 복사</button>
+    <button class="btn" type="button" id="gopen">Garmin에서 열기</button>
+    <button class="btn" type="button" id="gsend">공유…</button>
+  </div>
+  <button class="btn" type="button" id="gclose" style="width:100%">닫기</button>
+</dialog>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 "use strict";
@@ -1108,13 +1125,30 @@ function download(kind){if(!cur)return;const f=fileOf(kind),u=URL.createObjectUR
   a.href=u;a.download=f.name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);}
 $("#dlTcx").onclick=()=>download("tcx");
 $("#dlGpx").onclick=()=>download("gpx");
-$("#share").onclick=async()=>{if(!cur)return;const f=fileOf("tcx");
-  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:f.name});}catch(e){}}
-  else{download("tcx");status("이 브라우저는 파일 공유를 지원하지 않아 저장으로 대체했습니다.");}};
+/* Garmin 공유: Mac 중계 서버(Tailscale) → Garmin Connect 코스 생성(공개) → 링크 팝업 */
+async function garminShare(){
+  const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
+  if(!base||!key){status("설정 → Garmin 중계 주소·키를 먼저 입력해 주세요. (TCX 파일 공유로 대체)",true);const f=fileOf("tcx");
+    if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:f.name});}catch(e){}}else download("tcx");return;}
+  lnk.value="";["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=true);msg.textContent="Garmin에 공개 코스로 등록 중…";
+  if(d.showModal)d.showModal();else d.setAttribute("open","");
+  try{const name=courseName(),r=await fetch(base+"/course",{method:"POST",headers:{"Content-Type":"application/json","X-RR-Key":key},
+      body:JSON.stringify({name,gpx:toGPX(name,cur.coords),public:true})});
+    const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
+    lnk.value=j.url;["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=false);
+    msg.textContent=(j.public?"공개 코스로 등록했습니다":"등록했지만 공개 설정을 확인하지 못했습니다(Garmin에서 확인)")+" · "+j.name+" · "+((j.distance_m||0)/1000).toFixed(2)+"km";
+    try{await navigator.clipboard.writeText(j.url);msg.textContent+=" · 링크 복사됨";}catch(e){}
+  }catch(e){msg.textContent="등록 실패: "+(/Failed to fetch|Load failed|NetworkError/i.test(e.message)?"중계 서버에 연결하지 못했습니다. Mac이 켜져 있고 iPhone·Mac 모두 Tailscale에 연결됐는지 확인해 주세요.":e.message);}
+}
+$("#share").onclick=()=>{if(cur)garminShare();};
+$("#gclose").onclick=()=>{const d=$("#gdlg");d.close?d.close():d.removeAttribute("open");};
+$("#gcopy").onclick=async()=>{const v=$("#glink").value;try{await navigator.clipboard.writeText(v);$("#gmsg").textContent="링크를 복사했습니다.";}catch(e){$("#glink").select();document.execCommand("copy");$("#gmsg").textContent="링크를 복사했습니다.";}};
+$("#gopen").onclick=()=>{const v=$("#glink").value;if(v)window.open(v,"_blank","noopener");};
+$("#gsend").onclick=async()=>{const v=$("#glink").value;if(v&&navigator.share){try{await navigator.share({title:"RunRoute 코스",url:v});}catch(e){}}};
 
 /* settings */
 $("#engine").value=S.engine;$("#osrmBase").value=S.osrmBase;$("#ghKey").value=S.ghKey;
-["engine","osrmBase","ghKey"].forEach(k=>$("#"+k).addEventListener("change",e=>{S[k]=e.target.value.trim();save("settings",S);}));
+["engine","osrmBase","ghKey","relayUrl","relayKey"].forEach(k=>{const el=$("#"+k);if(S[k]!=null&&k.startsWith("relay"))el.value=S[k];el.addEventListener("change",e=>{S[k]=e.target.value.trim();save("settings",S);});});
 $("#prefDraw").onclick=()=>setPrefDraw(!prefDrawing);
 $("#prefUndo").onclick=()=>{const st=prefState();(st.strokes||[]).pop();save("pref",st);renderPref();};
 $("#prefClear").onclick=()=>{const st=prefState();if(!(st.strokes||[]).length)return;st.strokes=[];save("pref",st);renderPref();};

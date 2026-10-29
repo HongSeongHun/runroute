@@ -2,3 +2,6 @@
 courses/
 index.v*.html
 _test/
+relay/test*
+relay/check_rule.py
+__pycache__/

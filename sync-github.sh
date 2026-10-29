@@ -11,9 +11,9 @@ if [ ! -d "$DST/.git" ]; then
   mkdir -p "$DST" && git -C "$DST" init -q -b main
 fi
 rsync -a --delete \
-  --exclude '.git/' --exclude '.DS_Store' --exclude 'courses/' --exclude 'index.v*.html' --exclude '_test/' \
+  --exclude '.git/' --exclude '.DS_Store' --exclude 'courses/' --exclude 'index.v*.html' --exclude '_test/' --exclude 'relay/test*' --exclude 'relay/check_rule.py' --exclude '__pycache__/' \
   "$SRC/" "$DST/"
-printf '.DS_Store\ncourses/\nindex.v*.html\n_test/\n' > "$DST/.gitignore"
+printf '.DS_Store\ncourses/\nindex.v*.html\n_test/\nrelay/test*\nrelay/check_rule.py\n__pycache__/\n' > "$DST/.gitignore"
 
 cd "$DST"
 git add -A
