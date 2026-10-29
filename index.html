@@ -561,6 +561,24 @@ async function loadGraph(center,need){
   try{if(cache) await cache.put(ckey,new Response(txt,{headers:{"content-type":"application/json","x-rr-time":String(Date.now())}}));}catch(e){}
   GRAPH=buildGraph(JSON.parse(txt)); GRAPH.key=key; GRAPH.box=box; return GRAPH;
 }
+/* ---------- 통행 불가(공사 등) 구간: 모든 경로 생성에서 무조건 제외 ----------
+   line: 선에서 r(m) 이내 모든 길 차단 / poly: 다각형 안의 지정 도로 종류(cls)만 차단(차도는 유지)
+   2026-10-29 사용자 지정: 호 반응우엣(Crescent Lake) 호숫가·Starlight Bridge·Crescent Lake Park 산책로 공사 */
+const BLOCKS=[{"name":"호 반응우엣 동쪽 호숫가(Tôn Dật Tiên) 공사","line":[[10.727817,106.718037],[10.72784,106.718],[10.727933,106.717865],[10.728064,106.717724],[10.728179,106.717615],[10.728186,106.717609],[10.728236,106.717567],[10.728261,106.717546],[10.728644,106.717278],[10.728689,106.71727],[10.729031,106.717361],[10.727786,106.718088],[10.727745,106.718173],[10.727705,106.718287],[10.727672,106.718433],[10.727654,106.718547],[10.727641,106.718717],[10.727624,106.718891],[10.727587,106.719058],[10.727531,106.719253],[10.727456,106.719432],[10.727392,106.719549],[10.727333,106.719637],[10.727243,106.719749],[10.727131,106.719869],[10.726994,106.719981],[10.726854,106.720072],[10.726712,106.720141],[10.7266,106.720183],[10.726353,106.720246],[10.726241,106.720248],[10.726093,106.720246],[10.725985,106.72024],[10.725872,106.720225],[10.725755,106.720201],[10.725616,106.720162],[10.725478,106.720112],[10.725355,106.720048],[10.725207,106.719946],[10.725061,106.719819],[10.725,106.719749]],"r":35},{"name":"Starlight Bridge(Cầu Ánh Sao)·남쪽 보행로 공사","line":[[10.724917,106.717605],[10.724963,106.717682],[10.72501,106.71776],[10.725019,106.717786],[10.725022,106.717814],[10.725017,106.717844],[10.725004,106.717871],[10.724936,106.717997],[10.724859,106.71814],[10.724789,106.718301],[10.724739,106.718485],[10.724712,106.718677],[10.724711,106.718858],[10.72473,106.719037],[10.724768,106.719226],[10.724795,106.719346],[10.724856,106.719491],[10.724932,106.719638],[10.725,106.719749]],"r":20},{"name":"Crescent Lake Park 산책로 공사","poly":[[10.7283,106.716],[10.7283,106.7186],[10.7244,106.7186],[10.7244,106.716]],"cls":["footway","path","pedestrian","steps","cycleway","track"]}];
+function applyBlocks(g){const m=g.off[g.n],blk=new Uint8Array(m);let nb=0;
+  const segD2=(px,py,ax,ay,bx,by)=>{const dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy;let t=L?((px-ax)*dx+(py-ay)*dy)/L:0;t=Math.max(0,Math.min(1,t));return Math.hypot(ax+t*dx-px,ay+t*dy-py);};
+  const inPoly=(x,y,P)=>{let c=false;for(let i=0,j=P.length-1;i<P.length;j=i++){const [xi,yi]=P[i],[xj,yj]=P[j];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))c=!c;}return c;};
+  const B=BLOCKS.map(b=>({...b,L:b.line?b.line.map(q=>toXY(g,q)):null,P:b.poly?b.poly.map(q=>toXY(g,q)):null}));
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u)continue;
+    const pts=[[g.x[u],g.y[u]],[(g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2],[g.x[v],g.y[v]]];let hit=false;
+    for(const b of B){if(b.L){/* 중점이 r 이내이거나 양 끝이 모두 r 이내 */const d=q=>{let m2=Infinity;for(let k=1;k<b.L.length;k++)m2=Math.min(m2,segD2(q[0],q[1],b.L[k-1][0],b.L[k-1][1],b.L[k][0],b.L[k][1]));return m2;};
+        if(d(pts[1])<=b.r||(d(pts[0])<=b.r&&d(pts[2])<=b.r))hit=true;}
+      else if(b.P&&(!b.cls||b.cls.includes(g.ecls[e]))&&inPoly(pts[1][0],pts[1][1],b.P))hit=true;if(hit)break;}
+    if(hit){blk[e]=1;for(let f=g.off[v];f<g.off[v+1];f++)if(g.to[f]===u)blk[f]=1;nb++;}}
+  g.blk=blk;g.nBlocked=nb;
+  /* 모든 길이 막힌 노드는 스냅 대상에서 제외 */
+  for(const [k,a] of g.grid){const keep=a.filter(i=>{for(let e=g.off[i];e<g.off[i+1];e++)if(!blk[e])return true;return false;});if(keep.length)g.grid.set(k,keep);else g.grid.delete(k);}
+}
 function buildGraph(j){
   const id2i=new Map(),la=[],lo=[],E=[],EC=[],xid=new Set(),oid=new Set();
   for(const e of j.elements||[]){if(e.type==="node")xid.add(e.id);
@@ -588,8 +606,9 @@ function buildGraph(j){
   const np=new Float32Array(n),i2id=new Array(n);id2i.forEach((i,id)=>{i2id[i]=id;});
   let nx=0;for(let i=0;i<n;i++){if(oid.has(i2id[i])){if(xid.has(i2id[i]))nx++;else np[i]=XING_PEN;}}
   const C=60,grid=new Map();for(let i=0;i<n;i++){if(!main[i])continue;const k=Math.floor(x[i]/C)+","+Math.floor(y[i]/C);let a=grid.get(k);if(!a)grid.set(k,a=[]);a.push(i);}
-  return {n,la:Float64Array.from(la),lo:Float64Array.from(lo),x,y,lat0,lon0,kx,ky,off,to,len,wt,ecls,main,grid,C,np,nx,
+  const G0={n,la:Float64Array.from(la),lo:Float64Array.from(lo),x,y,lat0,lon0,kx,ky,off,to,len,wt,ecls,main,grid,C,np,nx,
     gs:new Float64Array(n),par:new Int32Array(n),seen:new Uint32Array(n),closed:new Uint32Array(n),stamp:0};
+  applyBlocks(G0);return G0;
 }
 const toXY=(g,p)=>[(p[1]-g.lon0)*g.kx,(p[0]-g.lat0)*g.ky];
 const toLL=(g,q)=>[g.lat0+q[1]/g.ky,g.lon0+q[0]/g.kx];
@@ -606,7 +625,7 @@ function astar(g,s,t,pen){
   const pop=()=>{const v=H[0],lv=H.pop(),lf=F.pop();if(H.length){H[0]=lv;F[0]=lf;let i=0;for(;;){const l=2*i+1,r=l+1;let m=i;if(l<H.length&&F[l]<F[m])m=l;if(r<H.length&&F[r]<F[m])m=r;if(m===i)break;let z=H[m];H[m]=H[i];H[i]=z;z=F[m];F[m]=F[i];F[i]=z;i=m;}}return v;};
   seen[s]=st;gs[s]=0;par[s]=-1;push(s,Math.hypot(g.x[s]-tx,g.y[s]-ty));let it=0;
   while(H.length){const u=pop();if(closed[u]===st)continue;closed[u]=st;if(u===t)break;if(++it>400000)return null;
-    for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(closed[v]===st)continue;
+    for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(closed[v]===st||(g.blk&&g.blk[e]))continue;
       const c=gs[u]+g.len[e]*(g.wt[e]+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0);
       if(seen[v]!==st||c<gs[v]){seen[v]=st;gs[v]=c;par[v]=u;push(v,c+Math.hypot(g.x[v]-tx,g.y[v]-ty));}}}
   if(closed[t]!==st) return null;
@@ -643,7 +662,7 @@ function bigShare(coords){const r=routeStats(coords);return r?r.orange+r.yellow:
 function roadRaster(g){if(g.rast)return g.rast;const C=12;let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(let i=0;i<g.n;i++){if(!g.main[i])continue;if(g.x[i]<x0)x0=g.x[i];if(g.x[i]>x1)x1=g.x[i];if(g.y[i]<y0)y0=g.y[i];if(g.y[i]>y1)y1=g.y[i];}
   const W=Math.ceil((x1-x0)/C)+1,Hh=Math.ceil((y1-y0)/C)+1,a=new Uint8Array(W*Hh),dir=new Uint8Array(W*Hh);
-  for(let u=0;u<g.n;u++){if(!g.main[u])continue;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u)continue;const val=g.wt[e]>=ORANGE_W?1:g.wt[e]>=BIG_W?2:3,st=Math.max(1,Math.ceil(g.len[e]/6));
+  for(let u=0;u<g.n;u++){if(!g.main[u])continue;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u||(g.blk&&g.blk[e]))continue;const val=g.wt[e]>=ORANGE_W?1:g.wt[e]>=BIG_W?2:3,st=Math.max(1,Math.ceil(g.len[e]/6));
     /* 도로 방향 비트(0~180°를 22.5° 8칸) */
     const ang=((Math.atan2(g.x[v]-g.x[u],g.y[v]-g.y[u])*180/Math.PI)+360)%180,bit=1<<(Math.round(ang/22.5)%8);
     for(let s=0;s<=st;s++){const f=s/st,cx=Math.floor((g.x[u]+(g.x[v]-g.x[u])*f-x0)/C),cy=Math.floor((g.y[u]+(g.y[v]-g.y[u])*f-y0)/C),k=cy*W+cx;if(a[k]<val)a[k]=val;dir[k]|=bit;}}}
@@ -752,7 +771,7 @@ function prefApply(g){const pts=prefPoints(),key=pts.length+":"+pts.slice(0,3).j
   for(const p of pts){if(!inBox(g.box,p))continue;const q=toXY(g,p),k=Math.floor(q[0]/C)+","+Math.floor(q[1]/C);let a=grid.get(k);if(!a)grid.set(k,a=[]);a.push(q);}
   const near=(x,y)=>{const cx=Math.floor(x/C),cy=Math.floor(y/C);for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const a=grid.get((cx+dx)+","+(cy+dy));if(a)for(const q of a)if(Math.hypot(q[0]-x,q[1]-y)<=C)return true;}return false;};
   const touched=[];
-  if(grid.size)for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u||g.wt[e]>=ORANGE_W||!g.main[u])continue;
+  if(grid.size)for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u||g.wt[e]>=ORANGE_W||!g.main[u]||(g.blk&&g.blk[e]))continue;
     if(near((g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2)&&(near(g.x[u],g.y[u])||near(g.x[v],g.y[v]))){pref[e]=1;for(let f=g.off[v];f<g.off[v+1];f++)if(g.to[f]===u)pref[f]=1;touched.push(u,v);}}
   /* 조각: 선호 도로를 500m 칸으로 나눔(빨간 선이 길게 이어져도 가까운 조각부터 이어서 방문) */
   const PG=500,zm=new Map(),zoneOf=new Int32Array(g.n).fill(-1);
@@ -763,7 +782,7 @@ function prefApply(g){const pts=prefPoints(),key=pts.length+":"+pts.slice(0,3).j
   zones.forEach((z,id)=>{z.id=id;z.nodes=[...z.nodes];z.cx=z.sx/z.L;z.cy=z.sy/z.L;z.R=Math.max(...z.nodes.map(i=>Math.hypot(g.x[i]-z.cx,g.y[i]-z.cy)));z.nodes.forEach(i=>{if(zoneOf[i]<0)zoneOf[i]=id;});});
   const edgeZone=new Int32Array(m).fill(-1);for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(!pref[e])continue;const v=g.to[e],z=zm.get(Math.floor((g.x[u]+g.x[v])/2/PG)+","+Math.floor((g.y[u]+g.y[v])/2/PG));if(z&&z.id!=null)edgeZone[e]=z.id;}
   g.prefKey=key;return g.prefInfo={pref,zones,zoneOf,edgeZone};}
-function stepOK(g,e,v){const w=g.wt[e];if(w>=ORANGE_W)return g.len[e]<=45;return !(g.np[v]>0);}
+function stepOK(g,e,v){if(g.blk&&g.blk[e])return false;const w=g.wt[e];if(w>=ORANGE_W)return g.len[e]<=45;return !(g.np[v]>0);}
 function distField(g,s,lim){const n=g.n,d=new Float64Array(n).fill(Infinity),H=[],F=[];
   const push=(v,f)=>{H.push(v);F.push(f);let i=H.length-1;while(i>0){const p=(i-1)>>1;if(F[p]<=F[i])break;let z=H[p];H[p]=H[i];H[i]=z;z=F[p];F[p]=F[i];F[i]=z;i=p;}};
   const pop=()=>{const v=H[0],lv=H.pop(),lf=F.pop();if(H.length){H[0]=lv;F[0]=lf;let i=0;for(;;){const l=2*i+1,r=l+1;let m=i;if(l<H.length&&F[l]<F[m])m=l;if(r<H.length&&F[r]<F[m])m=r;if(m===i)break;let z=H[m];H[m]=H[i];H[i]=z;z=F[m];F[m]=F[i];F[i]=z;i=m;}}return v;};
@@ -773,7 +792,7 @@ function distField(g,s,lim){const n=g.n,d=new Float64Array(n).fill(Infinity),H=[
   return d;}
 /* 막다른 가지 전체 표시: 차수 1 노드를 반복 제거(2-core) → 제거된 노드 = 들어갔다 되돌아와야 하는 곳 */
 function deadEnds(g){if(g.dead)return g.dead;const n=g.n,dg=new Int32Array(n),dead=new Uint8Array(n),q=[];
-  const nb=u=>{const s=new Set();if(g.np[u]>0)return s;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(g.np[v]>0||(g.wt[e]>=ORANGE_W&&g.len[e]>45))continue;s.add(v);}return s;};
+  const nb=u=>{const s=new Set();if(g.np[u]>0)return s;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(g.np[v]>0||(g.blk&&g.blk[e])||(g.wt[e]>=ORANGE_W&&g.len[e]>45))continue;s.add(v);}return s;};
   for(let u=0;u<n;u++){dg[u]=nb(u).size;if(dg[u]<=1){dead[u]=1;q.push(u);}}
   while(q.length){const u=q.pop();nb(u).forEach(v=>{if(!dead[v]&&--dg[v]<=1){dead[v]=1;q.push(v);}});}
   return g.dead=dead;}
