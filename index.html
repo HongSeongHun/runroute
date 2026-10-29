@@ -234,6 +234,10 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 <dialog id="gdlg" class="gdlg">
   <h2>Garmin 코스 공유</h2>
   <p id="gmsg" class="note">Garmin에 공개 코스로 등록 중…</p>
+  <div id="gsetup" hidden style="display:flex;flex-direction:column;gap:8px">
+    <input id="gsetupIn" placeholder="설정 링크 붙여넣기 (https://…#rr-relay=…&rr-key=…)" autocomplete="off" spellcheck="false">
+    <button class="btn primary" type="button" id="gsetupBtn">저장하고 Garmin에 등록</button>
+  </div>
   <input id="glink" readonly placeholder="등록되면 링크가 표시됩니다">
   <div class="actions">
     <button class="btn" type="button" id="gcopy">링크 복사</button>
@@ -1130,7 +1134,9 @@ async function garminShare(){
   const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
   lnk.value="";["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=true);
   if(d.showModal)d.showModal();else d.setAttribute("open","");
-  if(!base||!key){msg.textContent="Garmin 중계 설정이 없습니다. Mac에서 만든 '설정 링크'를 이 앱에서 한 번 열거나, 경로 엔진 설정 → Garmin 중계 주소·키를 입력해 주세요. (파일 공유는 하지 않습니다)";return;}
+  $("#gsetup").hidden=true;
+  if(!base||!key){msg.textContent="Garmin 중계 설정이 없습니다. Mac에서 복사한 설정 링크를 아래 칸에 붙여넣고 '저장하고 Garmin에 등록'을 눌러 주세요. (한 번만 하면 됩니다)";$("#gsetup").hidden=false;$("#glink").hidden=true;return;}
+  $("#glink").hidden=false;
   msg.textContent="Garmin에 공개 코스로 등록 중…";
   try{const name=courseName(),r=await fetch(base+"/course",{method:"POST",headers:{"Content-Type":"application/json","X-RR-Key":key},
       body:JSON.stringify({name,gpx:toGPX(name,cur.coords),public:true})});
@@ -1141,6 +1147,9 @@ async function garminShare(){
   }catch(e){msg.textContent="등록 실패: "+(/Failed to fetch|Load failed|NetworkError/i.test(e.message)?"중계 서버에 연결하지 못했습니다. Mac이 켜져 있고 iPhone·Mac 모두 Tailscale에 연결됐는지 확인해 주세요.":e.message);}
 }
 $("#share").onclick=()=>{if(cur)garminShare();};
+$("#gsetupBtn").onclick=()=>{const v=$("#gsetupIn").value.trim(),h=new URLSearchParams(v.slice(v.indexOf("#")+1));
+  if(!h.get("rr-relay")||!h.get("rr-key")){$("#gmsg").textContent="설정 링크 형식이 아닙니다. Mac에서 복사한 링크 전체를 붙여넣어 주세요.";return;}
+  S.relayUrl=h.get("rr-relay");S.relayKey=h.get("rr-key");save("settings",S);$("#relayUrl").value=S.relayUrl;$("#relayKey").value=S.relayKey;$("#gsetupIn").value="";garminShare();};
 $("#gclose").onclick=()=>{const d=$("#gdlg");d.close?d.close():d.removeAttribute("open");};
 $("#gcopy").onclick=async()=>{const v=$("#glink").value;try{await navigator.clipboard.writeText(v);$("#gmsg").textContent="링크를 복사했습니다.";}catch(e){$("#glink").select();document.execCommand("copy");$("#gmsg").textContent="링크를 복사했습니다.";}};
 $("#gopen").onclick=()=>{const v=$("#glink").value;if(v)window.open(v,"_blank","noopener");};
