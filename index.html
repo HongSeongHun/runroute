@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="RunRoute">
+<meta name="theme-color" content="#0f6b5c">
+<title>RunRoute Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: map fills the screen, control sheet docks bottom on phone / left on desktop */
+:root{
+  --bg:#f3f6f5; --panel:#ffffff; --fg:#14211e; --muted:#5b6b67; --line:#d9e2df;
+  --accent:#0f6b5c; --accent-fg:#ffffff; --route:#e2550f; --warn:#a15c00; --bad:#b3261e; --ok:#1f7a3f;
+  --f-body:"IBM Plex Sans KR",-apple-system,"Apple SD Gothic Neo",system-ui,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0e1513; --panel:#16201d; --fg:#e4ece9; --muted:#93a39e; --line:#2a3834;
+  --accent:#3fb39c; --accent-fg:#06201b; --route:#ff7a3d; --warn:#e3a54a; --bad:#ff8a80; --ok:#6fd38f;
+  color-scheme:dark;}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--f-body)}
+.app{display:flex;flex-direction:column;height:100%}
+#map{flex:1 1 auto;min-height:42vh;background:var(--line)}
+.sheet{flex:0 0 auto;max-height:58vh;overflow-y:auto;background:var(--panel);border-top:1px solid var(--line);
+  padding-block:14px calc(14px + env(safe-area-inset-bottom,0px));
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;flex-direction:column;gap:14px}
+@media (min-width:860px){
+  .app{flex-direction:row-reverse}
+  .sheet{width:390px;max-height:none;height:100%;border-top:0;border-right:1px solid var(--line)}
+}
+h1{font-size:17px;margin:0;letter-spacing:.01em;display:flex;align-items:baseline;gap:8px}
+h1 small{font-weight:400;color:var(--muted);font-size:12px}
+label.lbl{display:block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.seg{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{border:0;background:transparent;color:var(--fg);padding:9px 4px;font:inherit;font-size:14px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-fg);font-weight:600}
+.row{display:flex;gap:8px;align-items:stretch}
+.row>*{min-width:0}
+input,select{width:100%;font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:9px 10px}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.btn{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:8px;padding:9px 12px;cursor:pointer;white-space:nowrap}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:600;width:100%;padding:12px}
+.btn:disabled{opacity:.5;cursor:default}
+.pt{display:flex;flex-direction:column;gap:6px}
+.pt .coord{font:12px var(--f-mono);color:var(--muted)}
+.results{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.results li{padding:8px 10px;font-size:13px;cursor:pointer;border-top:1px solid var(--line)}
+.results li:first-child{border-top:0}
+.results li:hover{background:var(--bg)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.status{font-size:13px;color:var(--muted);min-height:1.5em}
+.status.err{color:var(--bad)}
+.result{border:1px solid var(--line);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat .v{font:500 20px var(--f-mono);font-variant-numeric:tabular-nums}
+.stat .k{font-size:11px;color:var(--muted);letter-spacing:.06em;text-transform:uppercase}
+.chip{display:inline-block;font:500 12px var(--f-mono);padding:2px 8px;border-radius:99px;border:1px solid currentColor}
+.chip.ok{color:var(--ok)} .chip.warn{color:var(--warn)}
+.actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+details{font-size:13px;color:var(--muted)}
+details summary{cursor:pointer}
+details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.chk{display:flex;align-items:center;gap:8px;color:var(--fg);font-size:14px}
+.chk input{width:auto;margin:0}
+.note{font-size:12px;color:var(--muted)}
+.km-label{font:600 10px var(--f-mono);color:#fff;background:var(--route);border-radius:99px;padding:1px 5px;white-space:nowrap;border:1px solid #fff}
+.pin{font:700 12px var(--f-body);color:#fff;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
+.pin.a{background:var(--accent)} .pin.b{background:#24324a}
+.picker{display:flex;align-items:center;gap:4px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:4px;box-shadow:0 1px 6px rgba(0,0,0,.2);font:13px var(--f-body)}
+.picker span{padding:0 6px;color:var(--muted);font-size:12px}
+.picker button{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:7px;padding:7px 11px;cursor:pointer}
+.picker button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.leaflet-top.leaflet-right{margin-top:env(safe-area-inset-top,0px);margin-right:env(safe-area-inset-right,0px)}
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;flex-wrap:wrap}
+.chk input{width:auto;margin:0}
+.ref{font-size:12px;color:var(--muted);line-height:1.4}
+.arr{width:16px;height:16px;pointer-events:none}
+.arr svg{display:block}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="map" role="application" aria-label="지도"></div>
+
+  <section class="sheet">
+    <h1>RunRoute <small>OSM 도보 경로 → Garmin 코스</small></h1>
+
+    <div>
+      <label class="lbl">경로 유형</label>
+      <div class="seg" id="mode">
+        <button type="button" data-mode="loop" aria-pressed="true">루프</button>
+        <button type="button" data-mode="outback" aria-pressed="false">반환점 왕복</button>
+        <button type="button" data-mode="a2b" aria-pressed="false">출발→도착</button>
+        <button type="button" data-mode="sketch" aria-pressed="false">스케치런</button>
+      </div>
+    </div>
+
+    <div class="pt">
+      <label class="lbl" for="qA">출발지</label>
+      <div class="row">
+        <input id="qA" placeholder="장소 검색 또는 지도 탭" autocomplete="off" enterkeyhint="search">
+        <button class="btn" type="button" id="locA">현재 위치</button>
+      </div>
+      <ul class="results" id="resA" hidden></ul>
+      <span class="coord" id="cA">지도에서 위치를 탭하셔도 됩니다</span>
+    </div>
+
+    <div class="pt" id="ptB" hidden>
+      <label class="lbl" for="qB">도착지</label>
+      <div class="row">
+        <input id="qB" placeholder="장소 검색 또는 지도 탭" autocomplete="off" enterkeyhint="search">
+      </div>
+      <ul class="results" id="resB" hidden></ul>
+      <span class="coord" id="cB">-</span>
+    </div>
+
+    <div class="pt" id="sketchBox" hidden>
+      <label class="lbl" for="shape">스케치 모양</label>
+      <div class="row">
+        <select id="shape" style="flex:0 0 40%">
+          <option value="text">글자·숫자</option><option value="dog">강아지</option><option value="cat">고양이</option>
+          <option value="heart">하트</option><option value="star">별</option>
+        </select>
+        <input id="sketchText" placeholder="예: 815, LOVE" maxlength="8" autocomplete="off" autocapitalize="characters">
+      </div>
+      <span class="note">출발지 주변(최대 2km)에서 그리기 좋은 위치를 찾아, 접근 구간 포함 전체 거리를 '최대 거리' 이내로 맞춥니다. 숫자 0–9, 영문 A–Z 지원.</span>
+    </div>
+
+    <div class="grid2">
+      <div>
+        <label class="lbl" for="dist" id="distLbl">목표 거리 (km)</label>
+        <input id="dist" type="number" inputmode="decimal" min="1" max="60" step="0.5" value="10">
+      </div>
+      <div id="dirBox">
+        <label class="lbl" for="dir">출발 방향</label>
+        <select id="dir">
+          <option value="">자동</option>
+          <option value="0">북</option><option value="45">북동</option><option value="90">동</option><option value="135">남동</option>
+          <option value="180">남</option><option value="225">남서</option><option value="270">서</option><option value="315">북서</option>
+        </select>
+      </div>
+      <div>
+        <label class="lbl" for="pace">예상 페이스 (/km)</label>
+        <input id="pace" value="5:30" inputmode="numeric" placeholder="710 → 7:10" autocomplete="off">
+      </div>
+      <div>
+        <label class="lbl" for="name">코스 이름</label>
+        <input id="name" maxlength="15" placeholder="자동 생성">
+      </div>
+    </div>
+
+    <label class="chk" id="libRow"><input type="checkbox" id="useLib" checked> 근처 내 Garmin 코스 기반으로 생성 <span class="note" id="libInfo">코스 라이브러리 로딩 중…</span></label>
+
+    <button class="btn primary" type="button" id="go">경로 만들기</button>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+
+    <div class="result" id="result" hidden>
+      <div class="stats">
+        <div class="stat"><div class="v" id="sDist">-</div><div class="k">실제 거리 km</div></div>
+        <div class="stat"><div class="v" id="sErr">-</div><div class="k">목표 대비</div></div>
+        <div class="stat"><div class="v" id="sTime">-</div><div class="k">예상 시간</div></div>
+      </div>
+      <div class="ref" id="refInfo" hidden></div>
+      <div class="actions">
+        <button class="btn" type="button" id="dlTcx">TCX 저장</button>
+        <button class="btn" type="button" id="dlGpx">GPX 저장</button>
+        <button class="btn" type="button" id="share">공유</button>
+      </div>
+      <button class="btn" type="button" id="again">다른 경로 생성</button>
+      <p class="note">Garmin Connect 웹 → 트레이닝 및 계획 → 코스 → 가져오기에서 TCX(권장) 또는 GPX를 올린 뒤 기기로 전송하세요.</p>
+    </div>
+
+    <details>
+      <summary>경로 엔진 설정</summary>
+      <div class="inner">
+        <label class="chk"><input type="checkbox" id="cut"> 불필요한 우회 제거 (막다른 가지·블록 돌기)</label>
+        <label class="lbl" for="engine">엔진</label>
+        <select id="engine">
+          <option value="osrm">OSRM (FOSSGIS 도보, 키 불필요, 초당 1회 제한)</option>
+          <option value="gh">GraphHopper (API 키 필요)</option>
+        </select>
+        <label class="lbl" for="osrmBase">OSRM 엔드포인트</label>
+        <input id="osrmBase" spellcheck="false">
+        <label class="lbl" for="ghKey">GraphHopper API 키</label>
+        <input id="ghKey" spellcheck="false" placeholder="graphhopper.com에서 발급">
+        <span class="note">허용 오차 ±3%, 최대 6회 재계산. 공용 서버이므로 과도한 반복 생성은 피해 주세요.</span>
+      </div>
+    </details>
+
+    <p class="note">지도·경로 데이터 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자 · 경로 FOSSGIS OSRM · 검색 Nominatim · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">지도 오류 신고</a></p>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ---------- geo math ---------- */
+const R = 6371008.8, TOL = 0.03, MAX_ITER = 6;
+const rad = d => d*Math.PI/180, deg = r => r*180/Math.PI;
+function hav(a,b){const dLa=rad(b[0]-a[0]),dLo=rad(b[1]-a[1]);
+  const s=Math.sin(dLa/2)**2+Math.cos(rad(a[0]))*Math.cos(rad(b[0]))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.min(1,Math.sqrt(s)));}
+function dest(p,brg,d){const f1=rad(p[0]),l1=rad(p[1]),t=rad(brg),dl=d/R;
+  const f2=Math.asin(Math.sin(f1)*Math.cos(dl)+Math.cos(f1)*Math.sin(dl)*Math.cos(t));
+  const l2=l1+Math.atan2(Math.sin(t)*Math.sin(dl)*Math.cos(f1),Math.cos(dl)-Math.sin(f1)*Math.sin(f2));
+  return [deg(f2),((deg(l2)+540)%360)-180];}
+function bearing(a,b){const f1=rad(a[0]),f2=rad(b[0]),dl=rad(b[1]-a[1]);
+  return (deg(Math.atan2(Math.sin(dl)*Math.cos(f2),Math.cos(f1)*Math.sin(f2)-Math.sin(f1)*Math.cos(f2)*Math.cos(dl)))+360)%360;}
+function cumDist(c){const out=[0];for(let i=1;i<c.length;i++)out.push(out[i-1]+hav(c[i-1],c[i]));return out;}
+function thin(c,min=4){const o=[c[0]];for(let i=1;i<c.length-1;i++){if(hav(o[o.length-1],c[i])>=min)o.push(c[i]);}o.push(c[c.length-1]);return o;}
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+/* ---------- settings / persistence ---------- */
+const DEF = {engine:"osrm", osrmBase:"https://routing.openstreetmap.de/routed-foot/route/v1/driving", ghKey:"", cut:true};
+function load(k,d){try{const v=localStorage.getItem("rr."+k);return v===null?d:JSON.parse(v);}catch(e){return d;}}
+function save(k,v){try{localStorage.setItem("rr."+k,JSON.stringify(v));}catch(e){}}
+const S = Object.assign({}, DEF, load("settings",{}));
+
+/* ---------- routing engines (rate-limited) ---------- */
+let lastCall = 0;
+async function throttle(){const w=1100-(Date.now()-lastCall); if(w>0) await sleep(w); lastCall=Date.now();}
+async function route(pts,opt={}){
+  await throttle();
+  if(S.engine==="gh"){
+    if(!S.ghKey) throw new Error("GraphHopper API 키를 설정에 입력해 주세요.");
+    const r=await fetch("https://graphhopper.com/api/1/route?key="+encodeURIComponent(S.ghKey),{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({points:pts.map(p=>[p[1],p[0]]),profile:"foot",points_encoded:false,instructions:false,calc_points:true})});
+    if(!r.ok) throw new Error("GraphHopper 응답 오류 ("+r.status+")");
+    const j=await r.json(); const p=j.paths[0];
+    return {dist:p.distance, coords:p.points.coordinates.map(c=>[c[1],c[0]])};
+  }
+  const url=S.osrmBase.replace(/\/$/,"")+"/"+pts.map(p=>p[1].toFixed(6)+","+p[0].toFixed(6)).join(";")+"?overview=full&geometries=geojson"+(opt.cs===false?"":(S.cut?"&continue_straight=false":"&continue_straight=true"))+"&steps="+(opt.steps?"true":"false");
+  const r=await fetch(url);
+  if(r.status===429) throw new Error("경로 서버 요청 한도 초과입니다. 잠시 후 다시 시도해 주세요.");
+  if(!r.ok) throw new Error("경로 서버 응답 오류 ("+r.status+")");
+  const j=await r.json();
+  if(j.code!=="Ok"||!j.routes||!j.routes.length) throw new Error("경로를 찾지 못했습니다 ("+(j.code||"unknown")+")");
+  const out={dist:j.routes[0].distance, coords:j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]])};
+  if(opt.steps) out.ix=j.routes[0].legs.flatMap(l=>l.steps.flatMap(st=>(st.intersections||[]).map(x=>({loc:[x.location[1],x.location[0]],b:x.bearings,inn:x.in}))));
+  return detour(out,opt);
+}
+/* 모든 엔진 결과에 우회 정리 적용 → 거리 보정(fit/fitAdd/cleanup)도 정리된 거리 기준 */
+function detour(out,opt){
+  if(!S.cut||opt.cs===false||opt.nocut) return out;
+  const k=cutDetours(out.coords,Math.min(1200,out.dist*0.15),CUT_REF&&CUT_REF.track);
+  if(k.cuts){out.coords=k.coords;out.dist=Math.max(0,out.dist-k.removed);out.cuts=k.cuts;out.removed=k.removed;}
+  return out;
+}
+/* ---------- detour cleanup ----------
+   경유점이 골목/막다른 길/단지 안쪽에 스냅되면 엔진이 (a) 들어갔다 같은 길로 되돌아오는 가지(spur),
+   (b) 블록을 한 바퀴 돌아 같은 교차로로 복귀하는 작은 루프를 만든다.
+   경로가 maxCut 이내 이동 후 CUT_TOL(m) 안으로 자기 자신(점 또는 선분)에 돌아오고 절약 거리 ≥ CUT_GAIN 이면
+   그 사이를 잘라 곧장 진행. 이음부는 기존 도로 선분 위(≤CUT_TOL)라 도로를 벗어나지 않는다.
+   maxCut = min(1.2km, 경로의 15%) → 루프 전체·편도 전체는 잘리지 않음. */
+const CUT_TOL=12, CUT_GAIN=30, REF_NEAR=25;
+/* Garmin 코스 기반 생성 중이면 그 코스 트랙: 내 코스에 원래 있는 랩·왕복은 의도된 것이므로 자르지 않음 */
+let CUT_REF=null;
+/* 트랙 근접 검사용 격자 인덱스(셀 ≈ 28m, 트랙별 1회 생성) */
+const REF_GRID=new WeakMap(), GC=0.00025;
+function refGrid(track){let g=REF_GRID.get(track);if(g)return g;g=new Map();
+  for(const q of track){const key=Math.floor(q[0]/GC)+","+Math.floor(q[1]/GC);let a=g.get(key);if(!a)g.set(key,a=[]);a.push(q);}
+  REF_GRID.set(track,g);return g;}
+function nearRef(p,g){const x=Math.floor(p[0]/GC),y=Math.floor(p[1]/GC);
+  for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const a=g.get((x+dx)+","+(y+dy));if(a)for(const q of a)if(hav(p,q)<=REF_NEAR)return true;}
+  return false;}
+function onRef(seg,track){
+  if(!track||!track.length) return false;
+  const g=refGrid(track), st=Math.max(1,Math.floor(seg.length/20)); let n=0,h=0;
+  for(let k=0;k<seg.length;k+=st){n++;if(nearRef(seg[k],g))h++;}
+  return h/n>=0.6;
+}
+function segDist(p,a,b){
+  const ky=R*Math.PI/180, kx=ky*Math.cos(rad(p[0]));
+  const ax=(a[1]-p[1])*kx, ay=(a[0]-p[0])*ky, dx=(b[1]-a[1])*kx, dy=(b[0]-a[0])*ky, L2=dx*dx+dy*dy;
+  const t=L2?Math.max(0,Math.min(1,-(ax*dx+ay*dy)/L2)):0;
+  return Math.hypot(ax+t*dx,ay+t*dy);
+}
+function cutDetours(coords,maxCut,refTrack){
+  let c=coords.slice(), cd=cumDist(c), removed=0, cuts=0;
+  for(let i=0;i<c.length-2;i++){
+    let j=i+2; while(j+1<c.length&&cd[j+1]-cd[i]<=maxCut) j++;
+    for(;j>=i+2;j--){
+      const span=cd[j]-cd[i]; if(span>maxCut) continue;
+      const gain=span-hav(c[i],c[j]); if(gain<CUT_GAIN) continue;
+      if(hav(c[i],c[j])<=CUT_TOL||segDist(c[j],c[i],c[i+1])<=CUT_TOL||segDist(c[i],c[j-1],c[j])<=CUT_TOL){
+        if(onRef(c.slice(i,j+1),refTrack)) continue;
+        removed+=gain; cuts++; c=c.slice(0,i+1).concat(c.slice(j)); cd=cumDist(c); i--; break;
+      }
+    }
+  }
+  return {coords:c,removed,cuts};
+}
+/* U-turn detector: heading change >=150deg within +-25 m */
+function uturns(c,win=25,thr=150){const cd=cumDist(c),out=[];let j0=0,j1=0;
+  for(let i=1;i<c.length-1;i++){while(cd[i]-cd[j0]>win)j0++;while(j1<c.length-1&&cd[j1]-cd[i]<win)j1++;
+    if(j0>=i||j1<=i||cd[i]-cd[j0]<5||cd[j1]-cd[i]<5)continue;
+    let d=Math.abs(bearing(c[i],c[j1])-bearing(c[j0],c[i]));if(d>180)d=360-d;
+    if(d>=thr&&!(out.length&&cd[i]-out[out.length-1].at<80))out.push({at:cd[i],p:c[i]});}
+  return out;}
+/* U-turns that were not intended (not in my Garmin course, not at its road ends, not at a chosen turnaround) */
+function badUturns(coords,ref,keep=[]){const allow=[...keep];
+  if(ref){allow.push(ref.track[0],ref.track[ref.track.length-1]);(ref.ut||[]).forEach(u=>allow.push(u.p));}
+  return uturns(coords).filter(u=>!allow.some(a=>hav(a,u.p)<80));}
+/* drop the waypoint that causes each stray U-turn, re-route (max 2 passes) */
+async function cleanup(res,target,onStep,measure=d=>d,keep=[]){
+  if(!res.pts)return res; let cur=res;
+  for(let k=0;k<2;k++){
+    const bad=badUturns(cur.coords,res.ref,keep); if(!bad.length)break;
+    const inner=cur.pts.slice(1,-1), drop=new Set();
+    bad.forEach(u=>{let bi=-1,bd=250;inner.forEach((w,i)=>{const d=hav(w,u.p);if(d<bd){bd=d;bi=i;}});if(bi>=0)drop.add(bi);});
+    if(!drop.size)break;
+    const pts=[cur.pts[0],...inner.filter((_,i)=>!drop.has(i)),cur.pts[cur.pts.length-1]];
+    const r=await route(pts); const d=measure(r.dist),err=(d-target)/target; onStep("U턴 정리",d);
+    if(badUturns(r.coords,res.ref,keep).length<bad.length&&Math.abs(err)<=Math.max(TOL,Math.abs(cur.err)+0.01))
+      cur={...cur,coords:r.coords,dist:r.dist,total:d,err,pts}; else break;
+  }
+  return cur;}
+/* out-and-back: turn around at a junction near half distance, preferring where the road ends (T-junction / no straight continuation) */
+async function turnaround(pts,target,ref,onStep){
+  let r=await route(pts,{steps:true}); onStep("반환점 맞추기",r.dist*2);
+  const bad=badUturns(r.coords,ref);
+  if(bad.length&&pts.length>2){const inner=pts.slice(1),drop=new Set();
+    bad.forEach(u=>{let bi=-1,bd=250;inner.slice(0,-1).forEach((w,i)=>{const d=hav(w,u.p);if(d<bd){bd=d;bi=i;}});if(bi>=0)drop.add(bi);});
+    if(drop.size){const r2=await route([pts[0],...inner.filter((_,i)=>!drop.has(i))],{steps:true});if(badUturns(r2.coords,ref).length<bad.length)r=r2;}}
+  const cd=cumDist(r.coords),half=target/2,cands=[];let ci=0;
+  (r.ix||[]).forEach((x,k)=>{ if(k===0||k===r.ix.length-1)return;
+    let bi=ci,bd=Infinity;for(let i=ci;i<r.coords.length;i++){const d=hav(r.coords[i],x.loc);if(d<bd){bd=d;bi=i;}else if(bd<15&&d>bd+60)break;} ci=bi;
+    if(x.b.length<3)return;
+    const st=(x.b[x.inn]+180)%360, cont=x.b.some((b,q)=>q!==x.inn&&Math.min(Math.abs(b-st),360-Math.abs(b-st))<35);
+    cands.push({i:bi,d:cd[bi],roadEnd:!cont});});
+  const ok=cands.filter(c=>Math.abs(c.d-half)<=half*TOL);
+  const pick=(ok.length?ok:cands).sort((a,b)=>(a.roadEnd===b.roadEnd?0:a.roadEnd?-1:1)*(ok.length?1:0)||Math.abs(a.d-half)-Math.abs(b.d-half))[0];
+  const end=pick?pick.i:r.coords.length-1, out=r.coords.slice(0,end+1), d=cd[end];
+  return {coords:out.concat(out.slice().reverse().slice(1)),total:2*d,err:(2*d-target)/target,roadEnd:!!(pick&&pick.roadEnd),turn:out[out.length-1]};
+}
+
+/* fit: adjust one scalar parameter until measured distance ≈ target */
+async function fit(build, measure, p0, target, onStep){
+  let p=p0, best=null;
+  for(let i=1;i<=MAX_ITER;i++){
+    const pts=build(p), r=await route(pts);
+    const d=measure(r.dist), err=(d-target)/target;
+    if(!best||Math.abs(err)<Math.abs(best.err)) best={...r,total:d,err,param:p,pts};
+    onStep(i,d);
+    if(Math.abs(err)<=TOL) break;
+    const ratio=Math.max(0.4,Math.min(2.5,target/d));
+    p = p*Math.pow(ratio,0.9);
+  }
+  return best;
+}
+
+/* ---------- route shapes ---------- */
+const rnd=(a,b)=>a+Math.random()*(b-a);
+
+/* ---------- Garmin course library (courses/index.json, build_course_index.py) ---------- */
+const FAM_R=50, GS=0.0005;
+let LIB=[], famGrid=null, refLine=null, lastRef=null;
+async function loadLib(){
+  try{const r=await fetch("courses/index.json",{cache:"no-cache"});if(!r.ok)throw new Error(r.status);
+    const j=await r.json(); LIB=(j.courses||[]).map(c=>({...c,ut:uturns(c.track,40)}));
+    famGrid=new Map();
+    LIB.forEach(c=>c.track.forEach(p=>{const k=Math.floor(p[0]/GS)+","+Math.floor(p[1]/GS);let a=famGrid.get(k);if(!a)famGrid.set(k,a=[]);a.push(p);}));
+    $("#libInfo").textContent="· 내 코스 "+LIB.length+"개";
+  }catch(e){LIB=[];$("#libInfo").textContent="· 라이브러리 없음 (로컬 서버로 실행해야 로드됨)";}
+}
+function nearestIdx(t,P){let bi=0,bd=Infinity;for(let i=0;i<t.length;i++){const d=hav(t[i],P);if(d<bd){bd=d;bi=i;}}return {i:bi,d:bd};}
+/* share of route points within FAM_R of any of my Garmin courses */
+function familiar(coords){
+  if(!famGrid||!famGrid.size)return null; let hit=0,n=0;
+  for(let i=0;i<coords.length;i+=3){n++;const p=coords[i],a=Math.floor(p[0]/GS),b=Math.floor(p[1]/GS);let ok=false;
+    for(let x=-1;x<=1&&!ok;x++)for(let y=-1;y<=1&&!ok;y++){const arr=famGrid.get((a+x)+","+(b+y));if(arr)for(const q of arr){if(hav(p,q)<=FAM_R){ok=true;break;}}}
+    if(ok)hit++;}
+  return n?hit/n:null;}
+/* walk along a course from i0 for len metres; loops wrap (extra laps), point-to-point courses bounce at the ends (overlap allowed) */
+function walk(c,i0,len,dir){const t=c.track,n=t.length,out=[t[i0]];let acc=0,i=i0,d=dir,g=0;
+  while(acc<len&&g++<50000){let j=i+d;
+    if(j<0||j>=n){if(c.loop)j=d>0?1:n-2;else{d=-d;j=i+d;}}
+    acc+=hav(t[i],t[j]);out.push(t[j]);i=j;}
+  return out;}
+/* evenly spaced waypoints along a path, always ending at its last point */
+function sampleWps(pts,k){const cd=cumDist(pts),tot=cd[cd.length-1],o=[];let j=0;
+  for(let n=1;n<k;n++){const tg=tot*n/k;while(j<cd.length-1&&cd[j]<tg)j++;o.push(pts[j]);}
+  o.push(pts[pts.length-1]);return o;}
+/* nearest course to the start (and to B for a2b), random among the best 3 */
+function chooseCourse(A,target,B){
+  if(!LIB.length)return null;
+  const lim=Math.min(3000,target*0.3);
+  const cs=LIB.map(c=>{const a=nearestIdx(c.track,A),b=B?nearestIdx(c.track,B):null;return {c,i:a.i,d:a.d,bi:b?b.i:null,bd:b?b.d:0};}).filter(x=>x.d<=lim);
+  if(!cs.length)return null;
+  const sc=x=>{const L=x.c.dist,ex=target/L;let pen=0;
+    if(x.c.loop&&!B&&ex>1.03){const frac=ex-Math.floor(ex);pen=frac>0.03&&frac<0.97?0.35:0;}
+    return x.d/1000+x.bd/1000+Math.abs(L-target)/target+pen+Math.random()*0.3;};
+  cs.sort((p,q)=>sc(p)-sc(q)); return cs.slice(0,3);
+}
+/* additive distance fit: p = metres walked along the course */
+async function fitAdd(build,measure,p0,target,k,onStep){
+  let p=p0,best=null;
+  for(let i=1;i<=MAX_ITER;i++){
+    const pts=build(p), r=await route(pts); const d=measure(r.dist),err=(d-target)/target;
+    if(!best||Math.abs(err)<Math.abs(best.err))best={...r,total:d,err,param:p,pts};
+    onStep(i,d); if(Math.abs(err)<=TOL)break;
+    p=Math.max(200,p+(target-d)/k*0.9);
+  }
+  return best;
+}
+/* backbone generator: follow my Garmin course, extend/shorten to the target */
+async function genRef(mode,A,B,target,onStep){
+  const list=chooseCourse(A,target,mode==="a2b"?B:null); if(!list||!list.length)return null;
+  let d0=Math.random()<0.5?1:-1; if(lastRef===list[0].c.id+":"+d0) d0=-d0;
+  const tries=[[list[0],d0],[list[0],-d0]]; if(list[1])tries.push([list[1],d0]);
+  let best=null;
+  for(const [pk,dir0] of tries){
+    const r=await refAttempt(mode,A,B,target,pk,dir0,onStep); r.key=pk.c.id+":"+dir0;
+    r.utn=badUturns(r.coords,r.ref,r.turn?[r.turn]:[]).length;
+    const key=x=>x.utn*10+(Math.abs(x.err)>TOL?5:0)+Math.abs(x.err);
+    if(!best||key(r)<key(best))best=r;
+    if(best.utn===0&&Math.abs(best.err)<=TOL)break;
+    onStep("U턴 줄이는 대안 탐색",r.total);
+  }
+  return best;
+}
+async function refAttempt(mode,A,B,target,pk,dir0,onStep){
+  CUT_REF=pk.c; try{return await refAttempt0(mode,A,B,target,pk,dir0,onStep);}finally{CUT_REF=null;}
+}
+async function refAttempt0(mode,A,B,target,pk,dir0,onStep){
+  const c=pk.c; let dir=dir0;
+  if(mode==="a2b"&&pk.bi!=null&&pk.bi!==pk.i&&!c.loop) dir=pk.bi>pk.i?1:-1;
+  const wp=len=>{const p=walk(c,pk.i,len,dir);return sampleWps(p,Math.max(3,Math.min(120,Math.round(len/400))));};
+  const appr=pk.d*1.3; let build,measure=d=>d,p0,k=1;
+  if(mode==="loop"){build=len=>[A,...wp(len),A];p0=Math.max(500,target-2*appr);}
+  else if(mode==="outback"){build=len=>[A,...wp(len)];measure=d=>2*d;k=2;p0=Math.max(300,target/2-appr);}
+  else{build=len=>[A,...wp(len),B];p0=Math.max(500,target-appr-pk.bd*1.3);}
+  const b=await fitAdd(build,measure,p0,target,k,onStep);
+  if(mode==="outback"){const t=await turnaround(build(b.param*1.12),target,c,onStep);return {...t,ref:c};}
+  const cl=await cleanup({...b,ref:c},target,onStep);
+  return {coords:cl.coords,total:cl.total,err:cl.err,ref:c};
+}
+/* ---------- Sketch run (GPS art): single-stroke glyphs & pictures ---------- */
+const GLYPH={
+ "0":[[0,0],[1,0],[1,1],[0,1],[0,0]], "1":[[0.2,0.8],[0.5,1],[0.5,0]], "2":[[0,1],[1,1],[1,0.5],[0,0.5],[0,0],[1,0]],
+ "3":[[0,1],[1,1],[1,0.5],[0.3,0.5],[1,0.5],[1,0],[0,0]], "4":[[0,1],[0,0.5],[1,0.5],[1,1],[1,0]],
+ "5":[[1,1],[0,1],[0,0.5],[1,0.5],[1,0],[0,0]], "6":[[1,1],[0,1],[0,0],[1,0],[1,0.5],[0,0.5]], "7":[[0,1],[1,1],[0.35,0]],
+ "8":[[0,0.5],[0,0],[1,0],[1,1],[0,1],[0,0.5],[1,0.5]], "9":[[1,0.5],[0,0.5],[0,1],[1,1],[1,0],[0,0]],
+ A:[[0,0],[0,1],[1,1],[1,0.5],[0,0.5],[1,0.5],[1,0]], B:[[0,0],[0,1],[0.8,1],[1,0.75],[0.8,0.5],[0,0.5],[0.8,0.5],[1,0.25],[0.8,0],[0,0]],
+ C:[[1,1],[0,1],[0,0],[1,0]], D:[[0,0],[0,1],[0.7,1],[1,0.7],[1,0.3],[0.7,0],[0,0]], E:[[1,1],[0,1],[0,0.5],[0.8,0.5],[0,0.5],[0,0],[1,0]],
+ F:[[1,1],[0,1],[0,0.5],[0.8,0.5],[0,0.5],[0,0]], G:[[1,1],[0,1],[0,0],[1,0],[1,0.5],[0.5,0.5]], H:[[0,1],[0,0],[0,0.5],[1,0.5],[1,1],[1,0]],
+ I:[[0.5,1],[0.5,0]], J:[[1,1],[1,0],[0,0],[0,0.3]], K:[[0,1],[0,0],[0,0.5],[1,1],[0,0.5],[1,0]], L:[[0,1],[0,0],[1,0]],
+ M:[[0,0],[0,1],[0.5,0.5],[1,1],[1,0]], N:[[0,0],[0,1],[1,0],[1,1]], O:[[0,0],[1,0],[1,1],[0,1],[0,0]], P:[[0,0],[0,1],[1,1],[1,0.5],[0,0.5]],
+ Q:[[0.6,0.3],[1,0],[0,0],[0,1],[1,1],[1,0]], R:[[0,0],[0,1],[1,1],[1,0.5],[0,0.5],[1,0]], S:[[1,1],[0,1],[0,0.5],[1,0.5],[1,0],[0,0]],
+ T:[[0,1],[1,1],[0.5,1],[0.5,0]], U:[[0,1],[0,0],[1,0],[1,1]], V:[[0,1],[0.5,0],[1,1]], W:[[0,1],[0.25,0],[0.5,0.6],[0.75,0],[1,1]],
+ X:[[0,0],[1,1],[0.5,0.5],[0,1],[1,0]], Y:[[0,1],[0.5,0.5],[1,1],[0.5,0.5],[0.5,0]], Z:[[0,1],[1,1],[0,0],[1,0]]};
+const PICS={
+ dog:{name:"강아지",p:[[0,0.85],[0.12,0.62],[0.7,0.62],[0.74,0.8],[0.72,0.98],[0.8,0.9],[0.95,0.86],[1,0.78],[0.93,0.71],[0.82,0.7],[0.8,0.55],[0.79,0.3],[0.79,0],[0.7,0],[0.7,0.3],[0.3,0.3],[0.28,0],[0.19,0],[0.18,0.36],[0.12,0.5],[0.12,0.62]]},
+ cat:{name:"고양이",p:[[0,0],[1,0],[1,0.75],[0.85,1],[0.68,0.75],[0.32,0.75],[0.15,1],[0,0.75],[0,0]]},
+ heart:{name:"하트",p:(()=>{const o=[];for(let k=0;k<=36;k++){const t=Math.PI+2*Math.PI*k/36;o.push([16*Math.sin(t)**3,13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t)]);}return o;})()},
+ star:{name:"별",p:(()=>{const o=[];for(let k=0;k<=10;k++){const r=k%2?0.4:1,a=Math.PI*k/5;o.push([r*Math.sin(a),r*Math.cos(a)]);}return o;})()}};
+function normPoly(p){const xs=p.map(q=>q[0]),ys=p.map(q=>q[1]),x0=Math.min(...xs),y0=Math.min(...ys),h=Math.max(Math.max(...ys)-y0,Math.max(...xs)-x0)||1;return p.map(q=>[(q[0]-x0)/h,(q[1]-y0)/h]);}
+function textPoly(t){const W=0.62,G=0.38,out=[];let x=0;
+  for(const ch of String(t).toUpperCase()){if(ch===" "){x+=W;continue;}const g=GLYPH[ch];if(!g)continue;g.forEach(q=>out.push([x+q[0]*W,q[1]]));x+=W+G;}
+  return out;}
+function sketchShape(){const k=$("#shape").value;
+  if(k==="text"){const t=$("#sketchText").value.trim().toUpperCase().replace(/[^0-9A-Z ]/g,"");const p=textPoly(t);return p.length>1?{poly:p,label:'"'+t+'"',tag:t.replace(/ /g,"")}:null;}
+  return {poly:normPoly(PICS[k].p),label:PICS[k].name,tag:k};}
+const pLen=p=>{let s=0;for(let i=1;i<p.length;i++)s+=Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]);return s;};
+function densify(p,step){const o=[p[0]];for(let i=1;i<p.length;i++){const a=p[i-1],b=p[i],L=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.floor(L/step);
+  for(let k=1;k<=n;k++){const f=k/(n+1);o.push([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f]);}o.push(b);}return o;}
+function toWorld(p,s,th,A){const p0=p[0],c=Math.cos(rad(th)),sn=Math.sin(rad(th));
+  return p.map(q=>{const dx=(q[0]-p0[0])*s,dy=(q[1]-p0[1])*s,x=dx*c+dy*sn,y=-dx*sn+dy*c,d=Math.hypot(x,y);return d<0.5?[A[0],A[1]]:dest(A,(deg(Math.atan2(x,y))+360)%360,d);});}
+function devMean(a,b){let s=0;for(const p of a){let m=Infinity;for(const q of b){const d=hav(p,q);if(d<m)m=d;}s+=m;}return s/a.length;}
+/* share of points in a that lie within tol of b */
+function coverage(a,b,tol){let h=0;for(const p of a){for(const q of b){if(hav(p,q)<=tol){h++;break;}}}return h/a.length;}
+async function trySketch(A,poly,s,th,onStep,label){
+  const Lw=pLen(poly)*s; let step=Math.max(120,Math.min(400,Lw/90))/s, wu=densify(poly,step);
+  while(wu.length>95&&step<1e6){step*=1.4;wu=densify(poly,step);}
+  const r=await route(toWorld(wu,s,th,A),{cs:false});
+  const ideal=toWorld(densify(poly,20/s),s,th,A), size=s*Math.max(...poly.map(q=>q[1]),...poly.map(q=>q[0]));
+  const rc=thin(r.coords,20),ic=thin(ideal,20),tol=Math.max(35,0.07*size);
+  const fid=(coverage(ic,rc,tol)+coverage(rc,ic,tol))/2;  /* both ways: drawn shape covered & no stray detours */
+  onStep(label,r.dist);
+  return {coords:r.coords,total:r.dist,ideal,th,s,fid};
+}
+/* sketch search: placement near the start (road grid matters most), rotation, then scale; approach leg counts toward maxD */
+async function genSketch(A,maxD,shape,onStep){
+  const poly=shape.poly,Lu=pLen(poly),isText=shape.label.startsWith('"'),all=[];
+  let s=maxD*0.9/(2.4*Lu);
+  const anchors=[{p:A,d:0}]; const b0=rnd(0,360);
+  for(let k=0;k<8;k++){const d=k%2?rnd(1300,2200):rnd(500,1100);anchors.push({p:dest(A,(b0+k*45+rnd(-12,12))%360,d),d});}
+  const rotOpts=isText?[-20,-10,0,10,20]:[0,45,90,135,180,225,270,315];
+  const pickRot=()=>rotOpts[Math.floor(Math.random()*rotOpts.length)];
+  /* 1) placement */
+  for(let k=0;k<anchors.length;k++){const an=anchors[k];const r=await trySketch(an.p,poly,s,k===0?0:pickRot(),onStep,"그릴 위치 탐색 "+(k+1)+"/"+anchors.length);
+    r.an=an;r.pen=an.d*1.3/maxD;all.push(r);
+    if(k===0&&r.total>0){s*=Math.pow(maxD*0.85/r.total,0.9);}}  /* calibrate scale from the first try */
+  const sc1=x=>x.fid-x.pen*0.8;
+  let best=all.slice(1).concat(all[0]).sort((a,b)=>sc1(b)-sc1(a))[0];
+  /* 2) rotation around the best placement */
+  for(const th of rotOpts.filter(t=>t!==best.th).sort(()=>Math.random()-0.5).slice(0,2)){
+    const r=await trySketch(best.an.p,poly,best.s,th,onStep,"모양 방향 탐색 "+th+"°");r.an=best.an;r.pen=best.pen;all.push(r);if(sc1(r)>sc1(best))best=r;}
+  /* 3) approach leg + scale to the budget */
+  let ap={dist:0,coords:[A]}; if(best.an.d>0){ap=await route([A,best.an.p]);onStep("시작점까지 접근 경로",ap.dist);}
+  const budget=Math.max(maxD*0.3,maxD-ap.dist); let sc=best.s*Math.pow(budget*0.95/best.total,0.9); const fin=[best];
+  for(let i=1;i<=3;i++){if(best.total<=budget&&best.total>=budget*0.9&&i===1)break;
+    const r=await trySketch(best.an.p,poly,sc,best.th,onStep,"크기 맞추기 "+i+"회차");fin.push(r);
+    if(r.total<=budget&&r.total>=budget*0.9)break; sc*=Math.pow(budget*0.95/r.total,0.9);}
+  const valid=fin.filter(x=>x.total<=budget*1.01),pool=valid.length?valid:fin;
+  const score=x=>valid.length?x.fid*0.7+Math.min(1,x.total/budget)*0.3:-x.total;
+  const b=pool.sort((p,q)=>score(q)-score(p))[0];
+  const coords=ap.dist?ap.coords.concat(b.coords.slice(1)):b.coords, total=ap.dist+b.total;
+  return {coords,total,err:(total-maxD)/maxD,sketch:{label:shape.label,tag:shape.tag,fid:b.fid,th:b.th,ideal:b.ideal,maxD,approach:ap.dist}};
+}
+/* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
+async function genLoop(A,target,brg,dirSign,onStep){
+  const n=3+Math.floor(Math.random()*3), step=360/(n+1);
+  const shape=Array.from({length:n},(_,i)=>({a:step*(i+1)+rnd(-step*0.25,step*0.25),f:rnd(0.8,1.2)}));
+  const back=(brg+180)%360;
+  const build=r=>{const c=dest(A,brg,r);
+    return [A,...shape.map(s=>dest(c,back+s.a*dirSign,r*s.f)),A];};
+  const b=await fit(build,d=>d,target/(2*Math.PI*1.15),target,onStep);
+  const cl=await cleanup(b,target,onStep);
+  return {coords:cl.coords,total:cl.total,err:cl.err};
+}
+async function genOutBack(A,target,brg,onStep){
+  const build=r=>[A,dest(A,brg,r)];
+  const b=await fit(build,d=>2*d,target/2/1.25,target,onStep);
+  return await turnaround(build(b.param*1.12),target,null,onStep);
+}
+async function genA2B(A,B,target,side,onStep){
+  const D=hav(A,B);
+  if(D<150) return genLoop(A,target,Math.random()*360,side,onStep);
+  const direct=await route([A,B]); onStep(1,direct.dist);
+  if(direct.dist>=target*(1-TOL)){
+    return {coords:direct.coords,total:direct.dist,err:(direct.dist-target)/target,
+      note:direct.dist>target*(1+TOL)?"최단 경로가 목표 거리보다 깁니다. 최단 경로를 표시합니다.":null};
+  }
+  const k=Math.max(1.05,Math.min(1.8,direct.dist/D));
+  const t=rnd(0.3,0.7), mid=[A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t], perp=(bearing(A,B)+(90+rnd(-20,20))*side+360)%360;
+  const build=L=>{const h=Math.sqrt(Math.max(L*L-(D/2)**2,(D*0.05)**2));return [A,dest(mid,perp,h),B];};
+  const b=await fit(build,d=>d,target/(2*k),target,(i,d)=>onStep(i+1,d));
+  return {coords:b.coords,total:b.total,err:b.err};
+}
+
+/* ---------- export ---------- */
+function esc(s){return String(s).replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;","'":"&apos;"}[c]));}
+function fmtPace(v){v=String(v).trim();const m=/^(\d{1,2})[:.'](\d{1,2})$/.exec(v);if(m)return (+m[1])+":"+m[2].padStart(2,"0");
+  const d=v.replace(/\D/g,"");if(!d)return "";if(d.length<=2)return (+d)+":00";return (+d.slice(0,-2))+":"+d.slice(-2);}
+function paceSec(){const m=/^(\d{1,2}):(\d{2})$/.exec(fmtPace($("#pace").value));return m&&+m[2]<60?(+m[1]*60+ +m[2]):330;}
+function courseName(){const n=$("#name").value.trim();if(n) return n.slice(0,15);
+  if(cur.sketch) return ("S-"+cur.sketch.tag.toUpperCase().slice(0,6)+" "+(cur.total/1000).toFixed(1)+"K").slice(0,15);
+  const t={loop:"Loop",outback:"OutBack",a2b:"A2B"}[state.mode];return (t+" "+(cur.total/1000).toFixed(1)+"K").slice(0,15);}
+function timeline(coords){const cd=cumDist(coords),ps=paceSec(),t0=new Date(Math.ceil(Date.now()/60000)*60000);
+  return {cd,times:cd.map(d=>new Date(t0.getTime()+Math.round(d/1000*ps*1000)).toISOString().replace(/\.\d{3}Z$/,"Z"))};}
+function toGPX(name,coords){const {times}=timeline(coords);
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="RunRoute Planner" xmlns="http://www.topografix.com/GPX/1/1">\n'+
+  ' <metadata><name>'+esc(name)+'</name><time>'+times[0]+'</time></metadata>\n <trk><name>'+esc(name)+'</name><type>running</type><trkseg>\n'+
+  coords.map((c,i)=>'  <trkpt lat="'+c[0].toFixed(6)+'" lon="'+c[1].toFixed(6)+'"><time>'+times[i]+'</time></trkpt>').join("\n")+
+  '\n </trkseg></trk>\n</gpx>\n';}
+function toTCX(name,coords){const {cd,times}=timeline(coords),n=coords.length-1,tot=cd[n];
+  const pos=c=>'<LatitudeDegrees>'+c[0].toFixed(6)+'</LatitudeDegrees><LongitudeDegrees>'+c[1].toFixed(6)+'</LongitudeDegrees>';
+  return '<?xml version="1.0" encoding="UTF-8"?>\n<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd">\n'+
+  ' <Courses>\n  <Course>\n   <Name>'+esc(name)+'</Name>\n   <Lap>\n    <TotalTimeSeconds>'+Math.round(tot/1000*paceSec())+'</TotalTimeSeconds>\n    <DistanceMeters>'+tot.toFixed(1)+'</DistanceMeters>\n'+
+  '    <BeginPosition>'+pos(coords[0])+'</BeginPosition>\n    <EndPosition>'+pos(coords[n])+'</EndPosition>\n    <Intensity>Active</Intensity>\n   </Lap>\n   <Track>\n'+
+  coords.map((c,i)=>'    <Trackpoint><Time>'+times[i]+'</Time><Position>'+pos(c)+'</Position><DistanceMeters>'+cd[i].toFixed(1)+'</DistanceMeters></Trackpoint>').join("\n")+
+  '\n   </Track>\n  </Course>\n </Courses>\n</TrainingCenterDatabase>\n';}
+
+/* ---------- UI ---------- */
+function $(s){return document.querySelector(s);}
+const state={mode:"loop",A:null,B:null,seed:0};
+let cur=null;
+const map=L.map("map",{zoomControl:true}).setView(load("view",[10.7290,106.7190]),load("zoom",14));
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'}).addTo(map);
+map.on("moveend",()=>{const c=map.getCenter();save("view",[c.lat,c.lng]);save("zoom",map.getZoom());});
+const pin=t=>L.divIcon({className:"",html:'<div class="pin '+t+'">'+(t==="a"?"S":"F")+'</div>',iconSize:[24,24],iconAnchor:[12,12]});
+let mA=null,mB=null,line=null,kmLayer=L.layerGroup().addTo(map),arrLayer=L.layerGroup().addTo(map);
+
+function setPoint(which,ll,label){
+  ll=[+ll[0],+ll[1]]; state[which]=ll;
+  const m=which==="A"?"mA":"mB";
+  if(which==="A"){if(mA)mA.setLatLng(ll);else mA=L.marker(ll,{icon:pin("a"),draggable:true}).addTo(map).on("dragend",e=>setPoint("A",[e.target.getLatLng().lat,e.target.getLatLng().lng]));}
+  else{if(mB)mB.setLatLng(ll);else mB=L.marker(ll,{icon:pin("b"),draggable:true}).addTo(map).on("dragend",e=>setPoint("B",[e.target.getLatLng().lat,e.target.getLatLng().lng]));}
+  $("#c"+which).textContent=(label?label+" · ":"")+ll[0].toFixed(5)+", "+ll[1].toFixed(5);
+  save("pt"+which,ll);
+}
+/* map picker: which point the next tap sets */
+let pick="A";
+const Picker=L.Control.extend({options:{position:"topright"},onAdd(){
+  const d=L.DomUtil.create("div","picker");
+  d.innerHTML='<span>탭하여 지정</span><button type="button" data-p="A" aria-pressed="true">출발</button><button type="button" data-p="B" aria-pressed="false">도착</button><button type="button" id="me" title="현재 위치로 이동" aria-label="현재 위치로 이동">◎</button>';
+  L.DomEvent.disableClickPropagation(d);return d;}});
+map.addControl(new Picker());
+function setPick(p){pick=p;document.querySelectorAll(".picker [data-p]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.p===p)));}
+document.querySelectorAll(".picker [data-p]").forEach(b=>b.onclick=()=>setPick(b.dataset.p));
+map.on("click",e=>{
+  const ll=[e.latlng.lat,e.latlng.lng];
+  if(state.mode!=="a2b"||pick==="A"){setPoint("A",ll);if(state.mode==="a2b")setPick("B");}
+  else setPoint("B",ll);
+});
+
+/* current location: blue dot + recenter, asked once on load */
+let meDot=null,meLL=null;
+function locate(thenSetStart){
+  if(!navigator.geolocation){status("이 브라우저는 위치 기능을 지원하지 않습니다. 지도를 탭해 지정해 주세요.",true);return;}
+  navigator.geolocation.getCurrentPosition(p=>{
+    meLL=[p.coords.latitude,p.coords.longitude];
+    if(meDot)meDot.setLatLng(meLL);else meDot=L.circleMarker(meLL,{radius:7,color:"#fff",weight:2,fillColor:"#1a73e8",fillOpacity:1}).addTo(map);
+    map.setView(meLL,Math.max(map.getZoom(),15));
+    if(thenSetStart||!state.A){setPoint("A",meLL,"현재 위치");if(state.mode==="a2b")setPick("B");}
+  },()=>status("위치 권한이 없거나 확인할 수 없습니다. 지도를 탭해 출발지를 지정해 주세요.",true),{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+}
+$("#me").onclick=()=>locate(false);
+
+document.querySelectorAll("#mode button").forEach(b=>b.onclick=()=>{
+  state.mode=b.dataset.mode;save("mode",state.mode);
+  document.querySelectorAll("#mode button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+  const sk=state.mode==="sketch"; $("#sketchBox").hidden=!sk; $("#dirBox").hidden=sk; $("#libRow").hidden=sk;
+  $("#distLbl").textContent=sk?"최대 거리 (km)":"목표 거리 (km)";
+  $("#ptB").hidden=state.mode!=="a2b"; if(mB) (state.mode==="a2b"?mB.addTo(map):mB.remove());
+  const pb=document.querySelector('.picker [data-p="B"]'); if(pb) pb.hidden=state.mode!=="a2b";
+  setPick(state.mode==="a2b"&&state.A?"B":"A");
+});
+
+/* Nominatim geocoding: on submit only (no autocomplete, per usage policy) */
+async function geocode(which){
+  const q=$("#q"+which).value.trim(); if(!q) return;
+  const ul=$("#res"+which); ul.hidden=false; ul.innerHTML="<li>검색 중…</li>";
+  const b=map.getBounds();
+  const url="https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&accept-language=ko,en&q="+encodeURIComponent(q)+
+    "&viewbox="+[b.getWest(),b.getNorth(),b.getEast(),b.getSouth()].map(v=>v.toFixed(4)).join(",");
+  try{const r=await fetch(url);if(!r.ok)throw new Error(r.status);const j=await r.json();
+    ul.innerHTML="";if(!j.length){ul.innerHTML="<li>결과가 없습니다. 지도를 탭해 지정해 주세요.</li>";return;}
+    j.forEach(x=>{const li=document.createElement("li");li.textContent=x.display_name;
+      li.onclick=()=>{setPoint(which,[x.lat,x.lon],x.name||q);map.setView([+x.lat,+x.lon],15);ul.hidden=true;};ul.append(li);});
+  }catch(e){ul.innerHTML="<li>검색 서버에 연결하지 못했습니다.</li>";}
+}
+["A","B"].forEach(w=>$("#q"+w).addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();geocode(w);}}));
+$("#locA").onclick=()=>locate(true);
+
+function status(t,err){const s=$("#status");s.textContent=t;s.classList.toggle("err",!!err);}
+function fmtTime(sec){const h=Math.floor(sec/3600),m=Math.round(sec%3600/60);return h?h+":"+String(m).padStart(2,"0"):m+"분";}
+
+function draw(res){
+  if(line) line.remove(); kmLayer.clearLayers();
+  if(refLine){refLine.remove();refLine=null;}
+  arrLayer.clearLayers();
+  if(res.sketch) refLine=L.polyline(res.sketch.ideal,{color:"#1a56db",weight:4,opacity:.75,dashArray:"8 6",interactive:false}).addTo(map);
+  else if(res.ref) refLine=L.polyline(res.ref.track,{color:"#5b6b67",weight:3,opacity:.55,dashArray:"6 6",interactive:false}).addTo(map);
+  const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
+  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=이상적인 모양) · 모양 일치도 "+Math.round(k.fid*100)+"% · 회전 "+k.th+"°"+(k.approach?" · 시작점까지 접근 "+(k.approach/1000).toFixed(1)+"km 포함":"")+" · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
+    +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
+  line=L.polyline(res.coords,{color:getComputedStyle(document.documentElement).getPropertyValue("--route").trim()||"#e2550f",weight:5,opacity:.9}).addTo(map);
+  const cd=cumDist(res.coords); let next=1000;
+  for(let i=1;i<cd.length;i++){while(cd[i]>=next){const f=(next-cd[i-1])/(cd[i]-cd[i-1]),a=res.coords[i-1],b=res.coords[i];
+    L.marker([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],{icon:L.divIcon({className:"",html:'<span class="km-label">'+next/1000+'</span>',iconSize:null}),interactive:false}).addTo(kmLayer);next+=1000;}}
+  /* direction arrows along the line (overlapping out/back legs get arrows at different spots) */
+  const tot=cd[cd.length-1],gap=Math.max(250,Math.min(800,tot/30)); let na=gap/2;
+  for(let i=1;i<cd.length;i++){while(cd[i]>=na){const a=res.coords[i-1],b=res.coords[i],f=(na-cd[i-1])/((cd[i]-cd[i-1])||1);
+    L.marker([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],{icon:L.divIcon({className:"",iconSize:[16,16],iconAnchor:[8,8],
+      html:'<div class="arr" style="transform:rotate('+bearing(a,b).toFixed(0)+'deg)"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 1.5 14 14 8 10.5 2 14Z" fill="#fff" stroke="#7a2a05" stroke-width="1.6" stroke-linejoin="round"/></svg></div>'}),interactive:false}).addTo(arrLayer);
+    na+=gap;}}
+  map.fitBounds(line.getBounds(),{padding:[24,24]});
+  $("#result").hidden=false;
+  $("#sDist").textContent=(res.total/1000).toFixed(2);
+  const e=res.err*100;$("#sErr").innerHTML='<span class="chip '+((res.sketch?res.total<=res.sketch.maxD*1.01:Math.abs(e)<=TOL*100)?"ok":"warn")+'">'+(e>=0?"+":"")+e.toFixed(1)+'%</span>';
+  $("#sTime").textContent=fmtTime(res.total/1000*paceSec());
+}
+
+async function generate(newSeed){
+  if(newSeed) state.seed++;
+  const target=parseFloat($("#dist").value)*1000;
+  if(!state.A){status("출발지를 먼저 지정해 주세요.",true);return;}
+  if(!(target>=500&&target<=60000)){status("목표 거리는 0.5~60km 사이로 입력해 주세요.",true);return;}
+  if(state.mode==="a2b"&&!state.B){status("도착지를 지정해 주세요.",true);return;}
+  const shape=state.mode==="sketch"?sketchShape():null;
+  if(state.mode==="sketch"&&!shape){status("그릴 글자·숫자를 입력해 주세요 (예: 815).",true);return;}
+  /* random every run: direction (±20° around user's choice), rotation, shape */
+  const dirSel=$("#dir").value, brg=dirSel!==""?(+dirSel+rnd(-20,20)+360)%360:rnd(0,360);
+  const side=Math.random()<0.5?-1:1;
+  $("#go").disabled=$("#again").disabled=true;
+  const step=(i,d)=>status((typeof i==="number"?"경로 계산 "+i+"회차":i)+" · "+(d/1000).toFixed(2)+"km");
+  try{
+    let res=null;
+    if(state.mode==="sketch") res=await genSketch(state.A,target,shape,step);
+    else if($("#useLib").checked&&LIB.length&&!(state.mode==="a2b"&&hav(state.A,state.B)<150))
+      res=await genRef(state.mode,state.A,state.B,target,step);
+    if(res) ;
+    else if(state.mode==="loop") res=await genLoop(state.A,target,brg,side,step);
+    else if(state.mode==="outback") res=await genOutBack(state.A,target,brg,step);
+    else res=await genA2B(state.A,state.B,target,side,step);
+    res.coords=thin(res.coords); res.fam=familiar(res.coords);
+    if(!res.sketch){res.ut=badUturns(res.coords,res.ref,res.turn?[res.turn]:[]).length; if(res.key) lastRef=res.key;}
+    cur=res; draw(res);
+    if(res.sketch) status(res.total<=target*1.01?(res.sketch.fid>=0.7?"최대 거리 이내 스케치 경로입니다.":"모양 일치도가 낮습니다. '다른 경로 생성'으로 다른 위치·방향을 시도하거나, 도로가 바둑판인 곳으로 출발지를 옮기거나 최대 거리를 늘려 보세요."):"도로 사정상 최대 거리를 넘었습니다. 최대 거리를 늘리거나 출발지를 옮겨 보세요.",res.total>target*1.01);
+    else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리 오차 범위 내 경로입니다.":"오차가 큽니다. '다른 경로 생성'으로 재시도해 보세요."), !!res.note);
+  }catch(e){
+    status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"경로 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
+  }finally{$("#go").disabled=$("#again").disabled=false;}
+}
+$("#go").onclick=()=>generate(false);
+$("#again").onclick=()=>generate(true);
+
+function fileOf(kind){const name=courseName();const body=kind==="tcx"?toTCX(name,cur.coords):toGPX(name,cur.coords);
+  const fn=name.replace(/[^\w.-]+/g,"_")+"."+kind;
+  return new File([body],fn,{type:kind==="tcx"?"application/vnd.garmin.tcx+xml":"application/gpx+xml"});}
+function download(kind){if(!cur)return;const f=fileOf(kind),u=URL.createObjectURL(f),a=document.createElement("a");
+  a.href=u;a.download=f.name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);}
+$("#dlTcx").onclick=()=>download("tcx");
+$("#dlGpx").onclick=()=>download("gpx");
+$("#share").onclick=async()=>{if(!cur)return;const f=fileOf("tcx");
+  if(navigator.canShare&&navigator.canShare({files:[f]})){try{await navigator.share({files:[f],title:f.name});}catch(e){}}
+  else{download("tcx");status("이 브라우저는 파일 공유를 지원하지 않아 저장으로 대체했습니다.");}};
+
+/* settings */
+$("#engine").value=S.engine;$("#osrmBase").value=S.osrmBase;$("#ghKey").value=S.ghKey;
+["engine","osrmBase","ghKey"].forEach(k=>$("#"+k).addEventListener("change",e=>{S[k]=e.target.value.trim();save("settings",S);}));
+$("#cut").checked=!!S.cut; $("#cut").addEventListener("change",e=>{S.cut=e.target.checked;save("settings",S);});
+
+/* pace: type digits only, 710 -> 7:10 */
+const paceEl=$("#pace"); paceEl.value=load("pace","5:30");
+paceEl.addEventListener("input",()=>{const v=paceEl.value;
+  if(/^\d{3}$/.test(v)&&+v[0]>=3||/^\d{4}$/.test(v)) paceEl.value=fmtPace(v);});
+paceEl.addEventListener("blur",()=>{const f=fmtPace(paceEl.value);if(f){paceEl.value=f;}
+  if(!/^\d{1,2}:[0-5]\d$/.test(paceEl.value)) status("페이스 형식을 확인해 주세요 (예: 710 → 7:10).",true);
+  else{save("pace",paceEl.value); if(cur) $("#sTime").textContent=fmtTime(cur.total/1000*paceSec());}});
+paceEl.addEventListener("keydown",e=>{if(e.key==="Enter")paceEl.blur();});
+$("#useLib").checked=load("useLib",true); $("#useLib").addEventListener("change",e=>save("useLib",e.target.checked));
+loadLib();
+
+$("#shape").addEventListener("change",e=>{$("#sketchText").hidden=e.target.value!=="text";});
+
+/* restore last session */
+const lm=load("mode","loop");document.querySelector('#mode button[data-mode="'+lm+'"]').click();
+const pA=load("ptA",null),pB=load("ptB",null);if(pA)setPoint("A",pA);if(pB)setPoint("B",pB);
+if(mB&&state.mode!=="a2b")mB.remove();
+locate(false);
+</script>
+</body>
+</html>
