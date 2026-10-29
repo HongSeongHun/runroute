@@ -181,13 +181,11 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
         <div class="stat"><div class="v" id="sTime">-</div><div class="k">예상 시간</div></div>
       </div>
       <div class="ref" id="refInfo" hidden></div>
-      <div class="actions">
-        <button class="btn" type="button" id="dlTcx">TCX 저장</button>
-        <button class="btn" type="button" id="dlGpx">GPX 저장</button>
-        <button class="btn" type="button" id="share">Garmin 공유</button>
+      <div class="actions" style="grid-template-columns:1fr">
+        <button class="btn primary" type="button" id="share">Garmin 공유</button>
       </div>
       <button class="btn" type="button" id="again">다른 경로 생성</button>
-      <p class="note">Garmin Connect 웹 → 트레이닝 및 계획 → 코스 → 가져오기에서 TCX(권장) 또는 GPX를 올린 뒤 기기로 전송하세요.</p>
+      <p class="note">Garmin 공유: Garmin Connect에 공개 코스로 등록하고 코스 링크를 복사합니다. (Strava 공유는 추후 추가)</p>
     </div>
 
     <details id="prefBox">
@@ -963,6 +961,49 @@ async function zoneDetour(direct,target,onStep){
       return {coords,total,err:(total-target)/target,zone:{name:Z.name,km:w.total/1000,pref:w.walk.pref}};}
     finally{GRAPH=saved;}}
   return null;}
+/* ---------- 최종 정리: 짧은 우회 제거 + 도착 지점 직진 연장 (스케치 제외 모든 모드) ----------
+   사용자 지정(2026-10-29): 큰길 앞 막다른 꼬리·왕복 차로 넘나들기 같은 짧은 우회는 절대 그리지 않음.
+   모자란 거리는 경로 중간에 끼우지 않고, 도착 지점에서 가장 곧게 뻗은 흰 도로로 직진했다 돌아오는 것으로 채움. */
+const SPUR_TOL=30, SPUR_MAX=800;
+function connector(a,b){const d=hav(a,b),g=GRAPH;
+  if(g&&inBox(g.box,a)&&inBox(g.box,b)){const u=nearestNode(g,a,40),v=nearestNode(g,b,40);
+    if(u>=0&&v>=0){const p=u===v?[u]:astar(g,u,v);if(p){const c=p.map(i=>[g.la[i],g.lo[i]]),L=cumDist(c).at(-1);if(L<=d*3+40)return [a,...c,b];}}}
+  return d<=25?[a,b]:null;}
+/* 갔다가 같은 길(또는 왕복 차로 반대편)로 되돌아오는 '접힌' 우회만 대상: 구간을 10m 간격으로 나눠 s 지점과 (전체-s) 지점이
+   45m 이내로 겹치는 비율이 85% 이상이면 꼬리/지그재그. 블록 한 바퀴 같은 정상 루프는 유지 */
+function thinLoop(c,i,j,span){const seg=c.slice(i,j+1),cd=cumDist(seg),L=cd[cd.length-1];if(L<1)return false;
+  const at=s=>{let k=1;while(k<cd.length-1&&cd[k]<s)k++;const t=(s-cd[k-1])/Math.max(1e-9,cd[k]-cd[k-1]);return [seg[k-1][0]+(seg[k][0]-seg[k-1][0])*t,seg[k-1][1]+(seg[k][1]-seg[k-1][1])*t];};
+  const N=Math.max(4,Math.floor(L/20));let ok=0;for(let k=0;k<N;k++){const s=(k+0.5)*L/2/N;if(hav(at(s),at(L-s))<=45)ok++;}
+  return ok>=0.85*N;}
+function cleanSpurs(coords){let c=coords.slice(),cuts=0,removed=0;
+  for(let guard=0;guard<60;guard++){const cd=cumDist(c),tot=cd[cd.length-1],lim=Math.min(SPUR_MAX,tot*0.3);let done=false;
+    for(let i=0;i<c.length-2&&!done;i++){let jb=-1;
+      for(let j=i+2;j<c.length&&cd[j]-cd[i]<=lim;j++){const h=hav(c[i],c[j]),span=cd[j]-cd[i];if(h<=SPUR_TOL&&span>=Math.max(60,4*h)&&thinLoop(c,i,j,span))jb=j;}
+      if(jb>0){const con=connector(c[i],c[jb]);if(!con)continue;const before=cd[jb]-cd[i],nc=c.slice(0,i).concat(con,c.slice(jb+1));
+        const after=cumDist(con).at(-1);if(after>=before-20)continue;c=nc;cuts++;removed+=before-after;done=true;}}
+    if(!done)break;}
+  return {coords:c,cuts,removed};}
+/* 도착 지점에서 직진 연장: 도착점에서 흰 도로(주황·노랑·공사 구간 제외)로 deficit/2 떨어진 지점들 중
+   경로가 가장 곧은 곳(직선거리/도로거리 최대)을 골라 같은 길로 갔다가 돌아옴 */
+function extendFinish(coords,deficit){for(const cap of [BIG_W,ORANGE_W,Infinity]){const r=extendFinish1(coords,deficit,cap);if(r)return r;}return null;}
+function extendFinish1(coords,deficit,cap){const g=GRAPH,F=coords[coords.length-1];if(deficit<40||!g||!inBox(g.box,F))return null;
+  const f=nearestNode(g,F,60);if(f<0)return null;const h=deficit/2,n=g.n,d=new Float64Array(n).fill(Infinity),par=new Int32Array(n).fill(-1),H=[];
+  d[f]=0;H.push([0,f]);
+  while(H.length){let bi=0;for(let k=1;k<H.length;k++)if(H[k][0]<H[bi][0])bi=k;const [du,u]=H[bi];H[bi]=H[H.length-1];H.pop();
+    if(du>d[u]||du>h*1.15)continue;
+    for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(g.blk&&g.blk[e])continue;if(cap<Infinity&&(g.wt[e]>=cap||!stepOK(g,e,v)))continue;const nd=du+g.len[e];if(nd<d[v]){d[v]=nd;par[v]=u;H.push([nd,v]);}}}
+  let best=-1,bs=-Infinity;
+  for(let v=0;v<n;v++){const dv=d[v];if(!(dv>=h*0.85&&dv<=h*1.15))continue;
+    const sc=Math.hypot(g.x[v]-g.x[f],g.y[v]-g.y[f])/dv-0.5*Math.abs(dv-h)/h;if(sc>bs){bs=sc;best=v;}}
+  if(best<0)return null;const path=[];for(let v=best;v>=0;v=par[v])path.push(v);path.reverse();
+  const fwd=path.map(i=>[g.la[i],g.lo[i]]);
+  return {tail:fwd.slice(1).concat(fwd.slice(0,-1).reverse()),len:d[best]*2,straight:Math.hypot(g.x[best]-g.x[f],g.y[best]-g.y[f])/d[best]};}
+function finalizeRoute(res,target,mode){if(res.sketch)return res;
+  let c=res.coords;
+  if(mode!=="outback"){const cs=cleanSpurs(c);c=cs.coords;res.spurCuts=cs.cuts;}
+  let tot=cumDist(c).at(-1);const def=target-tot;
+  if(def>Math.max(60,target*0.01)){const ex=extendFinish(c,def);if(ex){res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=ex.len;}}
+  res.coords=c;res.total=cumDist(c).at(-1);res.err=(res.total-target)/target;return res;}
 /* ===== END local-graph ===== */
 
 /* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
@@ -1138,6 +1179,8 @@ function draw(res){
   ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 경로 (출발지 반경 "+res.walk.R+"m · 꺾는 곳 "+res.walk.turns+"회 · 흰 도로 "+Math.round(res.walk.white*100)+"% · 선호 도로 "+Math.round(res.walk.pref*100)+"%"+(res.walk.zones.length?" · 선호 구간 "+res.walk.zones.length+"곳 포함":target_hint(res))+")":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
   if(res.zone)ri.textContent+=" · "+res.zone.name+" 구간 "+res.zone.km.toFixed(1)+"km(코스 도로 "+Math.round(res.zone.pref*100)+"%)";
+  if(res.spurCuts)ri.textContent+=" · 짧은 우회 "+res.spurCuts+"곳 정리";
+  if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
   {const st=routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
     res._xp=st.xp;}}
   const css=getComputedStyle(document.documentElement), C1=css.getPropertyValue("--route").trim()||"#6d28d9", C2=css.getPropertyValue("--route-back").trim()||"#0891b2";
@@ -1218,8 +1261,9 @@ async function generate(newSeed){
       res=best.r;}
     /* 최종 안전검사: 어떤 생성 방식이든 통행 불가 구간 통과 금지 */
     if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
+    if(!res.sketch){step("짧은 우회 정리",res.total||0);res=finalizeRoute(res,target,state.mode);if(blockHit(res.coords))res=await avoidBlocks(res);}
     res.coords=thin(res.coords); res.fam=familiar(res.coords);
-    if(!res.sketch){res.ut=badUturns(res.coords,res.ref,res.turn?[res.turn]:[]).length; if(res.key) lastRef=res.key;}
+    if(!res.sketch){res.ut=badUturns(res.coords,res.ref,[res.turn,res.extTurn].filter(Boolean)).length; if(res.key) lastRef=res.key;}
     cur=res; draw(res);
     if(res.sketch){const f=res.sketch.fid;
       status(res.total>target*1.01?"도로 사정상 최대 거리를 넘었습니다. 최대 거리를 늘리거나 출발지를 옮겨 보세요."
@@ -1239,8 +1283,6 @@ function fileOf(kind){const name=courseName();const body=kind==="tcx"?toTCX(name
   return new File([body],fn,{type:kind==="tcx"?"application/vnd.garmin.tcx+xml":"application/gpx+xml"});}
 function download(kind){if(!cur)return;const f=fileOf(kind),u=URL.createObjectURL(f),a=document.createElement("a");
   a.href=u;a.download=f.name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);}
-$("#dlTcx").onclick=()=>download("tcx");
-$("#dlGpx").onclick=()=>download("gpx");
 /* Garmin 공유: Mac 중계 서버(Tailscale) → Garmin Connect 코스 생성(공개) → 링크 팝업 */
 async function garminShare(){
   const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
