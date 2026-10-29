@@ -619,6 +619,8 @@ function buildGraph(j){
   for(const e of j.elements||[]){if(e.type==="node")xid.add(e.id);
     else if(e.type==="way"&&e.nodes){const t=e.tags||{};if(t.footway==="crossing"||t.crossing)e.nodes.forEach(id=>xid.add(id));if((HW_W[t.highway]||0)>=ORANGE_W)e.nodes.forEach(id=>oid.add(id));}}
   for(const e of j.elements||[]){if(e.type!=="way"||!e.geometry||!e.nodes)continue;const w=HW_W[(e.tags||{}).highway];if(!w)continue;
+    {const t=e.tags||{};/* 자동차 전용도로(motorroad)·차량 터널(Thủ Thiêm 터널 등)은 보행 불가 → 그래프에서 제외 */
+     if(t.motorroad==="yes"&&t.foot!=="yes")continue;if(t.tunnel==="yes"&&!/^(footway|path|pedestrian|steps|cycleway)$/.test(t.highway)&&t.foot!=="yes")continue;}
     let prev=-1;
     for(let k=0;k<e.nodes.length;k++){const p=e.geometry[k];if(!p){prev=-1;continue;}let i=id2i.get(e.nodes[k]);
       if(i===undefined){i=la.length;id2i.set(e.nodes[k],i);la.push(p.lat);lo.push(p.lon);}
@@ -946,17 +948,48 @@ function genWalk(A,E,target,onStep,opts={}){
    공식 자료 기준 코스 요소: Lê Duẩn–Nguyễn Bỉnh Khiêm 출발(Thảo Cầm Viên), 통일궁·노트르담 성당·중앙우체국, Nguyễn Huệ 보행거리,
    Ba Son 다리, Võ Văn Kiệt 대로, Sala, Thủ Thiêm Empire City 결승. (연도별 세부 코스는 변동)
    구역 안에서는 지정 도로를 흰 도로와 같은 비용으로 보고(큰길이어도) 우선 선호 도로로 포함. */
-const RUN_ZONES=[{"name":"호치민 마라톤 코스(1군 강변·Thủ Thiêm)","short":"마라톤 코스","box":[10.765,106.695,10.792,106.73],"center":[10.778,106.712],"roads":["Lê Duẩn","Nguyễn Bỉnh Khiêm","Công xã Paris","Đồng Khởi","Nguyễn Huệ","Lê Lợi","Tôn Đức Thắng","Hàm Nghi","Võ Văn Kiệt","Cầu Ba Son","Cầu Thủ Thiêm","Mai Chí Thọ","Tố Hữu","Trần Bạch Đằng","Nguyễn Cơ Thạch"],"verified":false}];  /* box(구역 경계)는 근사값 — Overpass 회복 후 실제 도로 좌표로 검증 예정 */
+const RUN_ZONES=[{"name":"호치민 마라톤 코스(1군 강변·Thủ Thiêm)","short":"마라톤 코스","box":[10.764,106.695,10.794,106.73],"center":[10.778,106.712],"roads":["Lê Duẩn","Đường Lê Duẩn","Nguyễn Bỉnh Khiêm","Công trường Công xã Paris","Đồng Khởi","Nguyễn Huệ","Lê Lợi","Tôn Đức Thắng","Hàm Nghi","Võ Văn Kiệt","Cầu Ba Son","Cầu Thủ Thiêm","Mai Chí Thọ","Tố Hữu","Trần Bạch Đằng","Nguyễn Cơ Thạch"],"verified":false}];  /* box(구역 경계)는 근사값 — Overpass 회복 후 실제 도로 좌표로 검증 예정 */
 function markZone(g,Z){g.zoneRoads=new Set(Z.roads);
-  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++)if(g.zoneRoads.has(g.ename[e])){g.wt[e]=1;g.np[u]=0;g.np[g.to[e]]=0;}
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++)if(g.zoneRoads.has(g.ename[e])){g.wt[e]=0.5;g.zoneE=g.zoneE||new Uint8Array(g.to.length);g.zoneE[e]=1;g.np[u]=0;g.np[g.to[e]]=0;}
   g.dead=null;g.rast=null;g.prefKey=null;}
+/* 구역 경로: 지정 도로(마라톤 코스) 양 끝을 '앵커'로 두고, 예산 안에서 지정 도로 거리를 가장 많이 늘리는 앵커를 하나씩 끼워 넣음.
+   새 구간이 기존 구간을 반대로 되짚는 비율이 30%를 넘으면 제외(왔다갔다 방지). 남는 거리는 최종 단계에서 도착 지점 직진 연장으로 채움. */
+/* 25m 격자: 경로가 지나간 칸(10m 간격 샘플). foldFrac(S=칸 집합 배열) = 새 경로 중 기존 칸(인접 포함, 약 40m 이내)과 겹치는 비율 → 같은 길·반대 차로 되짚기 */
+function cellsOf(g,p){const S=new Set();for(let i=1;i<p.length;i++){const a=p[i-1],b=p[i],d=Math.hypot(g.x[b]-g.x[a],g.y[b]-g.y[a]),n=Math.max(1,Math.ceil(d/10));
+  for(let k=0;k<=n;k++){const x=g.x[a]+(g.x[b]-g.x[a])*k/n,y=g.y[a]+(g.y[b]-g.y[a])*k/n;S.add(Math.floor(x/25)+","+Math.floor(y/25));}}return S;}
+function foldFrac(g,p,S){let tot=0,hit=0;for(let i=1;i<p.length;i++){const a=p[i-1],b=p[i],d=Math.hypot(g.x[b]-g.x[a],g.y[b]-g.y[a]),n=Math.max(1,Math.ceil(d/10));
+  for(let k=1;k<=n;k++){const x=g.x[a]+(g.x[b]-g.x[a])*k/n,y=g.y[a]+(g.y[b]-g.y[a])*k/n,cx=Math.floor(x/25),cy=Math.floor(y/25);tot+=d/n;
+    let h=false;for(const T of S){for(let dx=-1;dx<=1&&!h;dx++)for(let dy=-1;dy<=1;dy++)if(T.has((cx+dx)+","+(cy+dy))){h=true;break;}if(h)break;}if(h)hit+=d/n;}}return {tot,hit};}
+const foldM=(g,p,S)=>foldFrac(g,p,S).hit;
+function zoneRoute(g,Z,a,b,budget,onStep){const s=nearestNode(g,a,300),t=nearestNode(g,b,300);if(s<0||t<0||!g.zoneE)return null;
+  const byName=new Map();for(let u=0;u<g.n;u++){if(!inBox(Z.box,[g.la[u],g.lo[u]]))continue;for(let e=g.off[u];e<g.off[u+1];e++)if(g.zoneE[e]){const k=g.ename[e];if(!byName.has(k))byName.set(k,[]);byName.get(k).push(u);break;}}
+  const anchors=[];for(const [k,ns] of byName){if(ns.length<2)continue;const mx=ns.reduce((p,u)=>p+g.x[u],0)/ns.length,my=ns.reduce((p,u)=>p+g.y[u],0)/ns.length;
+    let sxx=0,sxy=0,syy=0;for(const u of ns){const dx=g.x[u]-mx,dy=g.y[u]-my;sxx+=dx*dx;sxy+=dx*dy;syy+=dy*dy;}const th=0.5*Math.atan2(2*sxy,sxx-syy),ux=Math.cos(th),uy=Math.sin(th);
+    let lo=Infinity,hi=-Infinity,ul=-1,uh=-1;for(const u of ns){const pr=(g.x[u]-mx)*ux+(g.y[u]-my)*uy;if(pr<lo){lo=pr;ul=u;}if(pr>hi){hi=pr;uh=u;}}
+    if(hi-lo>=250){anchors.push(ul,uh);}}
+  const leg=new Map(),L=(u,v)=>{const k=u+","+v;if(leg.has(k))return leg.get(k);const p=astar(g,u,v);let r=null;
+    if(p){let d=0,zl=0;const es=[];for(let i=1;i<p.length;i++)for(let e=g.off[p[i-1]];e<g.off[p[i-1]+1];e++)if(g.to[e]===p[i]){d+=g.len[e];if(g.zoneE[e])zl+=g.len[e];es.push(p[i-1]+">"+p[i]);break;}r={p,d,zl,es};}
+    leg.set(k,r);return r;};
+  let seq=[s,t];const first=L(s,t);if(!first)return null;let tot=first.d,used=new Set();
+  for(let it=0;it<20;it++){onStep&&onStep("마라톤 코스 구간 배치 "+(it+1),tot);
+    const lc=[];for(let i=1;i<seq.length;i++){const r=L(seq[i-1],seq[i]);r.c=r.c||cellsOf(g,r.p);lc.push(r.c);}
+    let best=null;
+    for(const x of anchors){if(used.has(x)||seq.includes(x))continue;
+      for(let i=1;i<seq.length;i++){const A=L(seq[i-1],x),B=L(x,seq[i]),C=L(seq[i-1],seq[i]);if(!A||!B)continue;
+        const nd=tot-C.d+A.d+B.d;if(nd>budget*1.02)continue;const dz=A.zl+B.zl-C.zl,dd=A.d+B.d-C.d;if(dz<=150||dd<=0)continue;
+        A.c=A.c||cellsOf(g,A.p);const others=lc.filter((_,k)=>k!==i-1);if(foldM(g,B.p,[A.c])>120||foldM(g,A.p.concat(B.p),others)>200)continue;const sc=dz/dd+dz/budget;if(!best||sc>best.sc)best={sc,x,i,nd};}}
+    if(!best)break;seq.splice(best.i,0,best.x);used.add(best.x);tot=best.nd;}
+  if(seq.length<=2)return null;
+  let path=[s];for(let i=1;i<seq.length;i++)path=path.concat(L(seq[i-1],seq[i]).p.slice(1));
+  const o=pathOut(g,path);let zl=0;for(let i=1;i<seq.length;i++)zl+=L(seq[i-1],seq[i]).zl;
+  return {coords:o.coords,total:o.dist,walk:{pref:zl/Math.max(1,o.dist)}};}
 async function zoneDetour(direct,target,onStep){
   for(const Z of RUN_ZONES){const c=direct.coords,iz=c.map(p=>inBox(Z.box,p)),i0=iz.indexOf(true),i1=iz.lastIndexOf(true);if(i0<0)continue;
     const cd=cumDist(c),Lin=cd[i1]-cd[i0],surplus=target-direct.dist;if(Lin<300||surplus<1000)continue;
     onStep(Z.short+" 구역 도로망 불러오는 중",direct.dist);const saved=GRAPH;let zg=null;
     try{zg=await loadGraph(Z.center,3000);}catch(e){GRAPH=saved;continue;}
     try{GRAPH=zg;markZone(zg,Z);onStep(Z.short+" 구역 경로 탐색",direct.dist);await sleep(0);
-      const w=genWalk(c[i0],c[i1],Lin+surplus,onStep,{force:true});if(!w)continue;
+      let w=zoneRoute(zg,Z,c[i0],c[i1],Lin+surplus,onStep);if(!w)w=genWalk(c[i0],c[i1],Lin+surplus,onStep,{force:true});if(!w)continue;
       const coords=c.slice(0,i0).concat(w.coords,c.slice(i1+1)),total=cumDist(coords).at(-1);
       return {coords,total,err:(total-target)/target,zone:{name:Z.name,km:w.total/1000,pref:w.walk.pref}};}
     finally{GRAPH=saved;}}
