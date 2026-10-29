@@ -195,7 +195,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
         <input id="osrmBase" spellcheck="false">
         <label class="lbl" for="ghKey">GraphHopper API 키</label>
         <input id="ghKey" spellcheck="false" placeholder="graphhopper.com에서 발급">
-        <span class="note">로컬 도로망: 생성 시 주변 도로(반경 2~3km)를 Overpass에서 1회 받아 7일 캐시. 노랑·주황 큰길은 비용 가중으로 가급적 피함(필요하면 사용). 범위를 넘는 긴 경로는 OSRM으로 자동 전환. 허용 오차 ±3%.</span>
+        <span class="note">로컬 도로망: 생성 시 주변 도로(반경 2~3km)를 Overpass에서 1회 받아 7일 캐시. 흰 도로 우선, 노랑 1.8배·주황 4~6배 비용으로 회피, 주황 도로는 건널목·신호등 지점에서 횡단(건널목 표시가 없으면 ⚠ 표시). 범위를 넘는 긴 경로는 OSRM으로 자동 전환. 허용 오차 ±3%.</span>
       </div>
     </details>
 
@@ -487,10 +487,13 @@ function coverage(a,b,tol){let h=0;for(const p of a){for(const q of b){if(hav(p,
 /* ---------- Local OSM road graph (Overpass) : 도로 등급 가중 A* ----------
    지도 색 = OSM 도로 등급. 흰색(residential·tertiary 등)·보행로 우선, 노랑(secondary)·주황(primary/trunk)은 비용 가중.
    "무조건"이 아니라 비용 배수: 예) primary 1.6 → 작은 길 우회가 1.6배 이하로 길면 작은 길 선택. */
-const OVERPASS="https://overpass-api.de/api/interpreter";
-const HW_W={footway:1,pedestrian:1,path:1,living_street:1,residential:1,unclassified:1,cycleway:1,track:1.05,service:1.08,
-  tertiary:1.05,tertiary_link:1.05,steps:1.4,secondary:1.3,secondary_link:1.3,primary:1.6,primary_link:1.6,trunk:2.2,trunk_link:2.2};
-const BIG_W=1.3; /* ≥ secondary = 노랑·주황 도로 */
+const HW_W={footway:1,pedestrian:1,path:1,living_street:1,residential:1,unclassified:1,cycleway:1,track:1.05,service:1.1,
+  tertiary:1,tertiary_link:1,steps:1.4,secondary:1.8,secondary_link:1.8,primary:4,primary_link:4,trunk:6,trunk_link:6};
+const BIG_W=1.8, ORANGE_W=4; /* ≥1.8 노랑(secondary) · ≥4 주황(primary/trunk) */
+/* 주황 도로 횡단: 건널목(highway=crossing·footway=crossing)·신호등(traffic_signals) 노드에서만.
+   그 외 지점에서 옆길→주황 도로 노드로 진입하면 XING_PEN(m 환산) 가산 → 사실상 건널목으로 우회. 건널목이 아예 없으면 최후 수단으로 허용 */
+const XING_PEN=1200;  /* 실측(푸미흥 7구간): 0→주황40%·무단횡단23, 1200→5.9%·9, 2500→12.4%·6(건널목까지 큰길을 걷게 됨) */
+const OVERPASS_EP=["https://overpass-api.de/api/interpreter","https://overpass.private.coffee/api/interpreter"];
 let GRAPH=null;
 function boxAround(c,r){const dLa=r/111195,dLo=r/(111195*Math.cos(rad(c[0])));return [c[0]-dLa,c[1]-dLo,c[0]+dLa,c[1]+dLo];}
 function inBox(b,p){return p[0]>=b[0]&&p[0]<=b[2]&&p[1]>=b[1]&&p[1]<=b[3];}
@@ -499,19 +502,26 @@ async function loadGraph(center,need){
   const r=need<=2000?2000:3000, cc=[Math.round(center[0]*100)/100,Math.round(center[1]*100)/100], key=cc.join(",")+":"+r;
   if(GRAPH&&GRAPH.key===key) return GRAPH;
   const box=boxAround(cc,r+800);
-  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+box.map(v=>v.toFixed(4)).join(",")+');out body geom qt;';
-  const url=OVERPASS+"?data="+encodeURIComponent(q);
-  let txt=null,cache=null;
-  try{cache=await caches.open("rr-osm-v1");const hit=await cache.match(url);
+  const bb=box.map(v=>v.toFixed(4)).join(",");
+  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;';
+  const ckey="https://runroute.local/osm?"+encodeURIComponent(q);
+  let txt=null,cache=null,last="";
+  try{cache=await caches.open("rr-osm-v2");const hit=await cache.match(ckey);
     if(hit&&Date.now()-(+hit.headers.get("x-rr-time")||0)<7*864e5) txt=await hit.text();}catch(e){}
-  if(txt===null){const r2=await fetch(url);
-    if(!r2.ok) throw new Error("도로망(Overpass) 응답 오류 ("+r2.status+")");
-    txt=await r2.text();
-    try{if(cache) await cache.put(url,new Response(txt,{headers:{"content-type":"application/json","x-rr-time":String(Date.now())}}));}catch(e){}}
+  /* 공용 서버 혼잡(429/502/504) 대비: 서버 2곳 × 재시도(대기 2s→6s) */
+  for(const ep of OVERPASS_EP){if(txt!==null)break;
+    for(const w of [0,2000,6000]){if(w)await sleep(w);
+      try{const r2=await fetch(ep+"?data="+encodeURIComponent(q));
+        if(r2.ok){const t=await r2.text();if(t.trim().startsWith("{")){txt=t;break;}last="응답 형식 오류";}
+        else{last=String(r2.status);if(![429,502,503,504].includes(r2.status))break;}}catch(e){last="연결 실패";}}}
+  if(txt===null) throw new Error("도로망 서버(Overpass)가 혼잡합니다 ("+last+"). 잠시 후 다시 시도해 주세요.");
+  try{if(cache) await cache.put(ckey,new Response(txt,{headers:{"content-type":"application/json","x-rr-time":String(Date.now())}}));}catch(e){}
   GRAPH=buildGraph(JSON.parse(txt)); GRAPH.key=key; GRAPH.box=box; return GRAPH;
 }
 function buildGraph(j){
-  const id2i=new Map(),la=[],lo=[],E=[];
+  const id2i=new Map(),la=[],lo=[],E=[],xid=new Set(),oid=new Set();
+  for(const e of j.elements||[]){if(e.type==="node")xid.add(e.id);
+    else if(e.type==="way"&&e.nodes){const t=e.tags||{};if(t.footway==="crossing"||t.crossing)e.nodes.forEach(id=>xid.add(id));if((HW_W[t.highway]||0)>=ORANGE_W)e.nodes.forEach(id=>oid.add(id));}}
   for(const e of j.elements||[]){if(e.type!=="way"||!e.geometry||!e.nodes)continue;const w=HW_W[(e.tags||{}).highway];if(!w)continue;
     let prev=-1;
     for(let k=0;k<e.nodes.length;k++){const p=e.geometry[k];if(!p){prev=-1;continue;}let i=id2i.get(e.nodes[k]);
@@ -532,8 +542,10 @@ function buildGraph(j){
     while(sp){const u=stk[--sp];cnt++;for(let e=off[u];e<off[u+1];e++){const v=to[e];if(comp[v]<0){comp[v]=c;stk[sp++]=v;}}}
     if(cnt>bestN){bestN=cnt;best=c;}c++;}
   const main=new Uint8Array(n);for(let i=0;i<n;i++)main[i]=comp[i]===best?1:0;
+  const np=new Float32Array(n),i2id=new Array(n);id2i.forEach((i,id)=>{i2id[i]=id;});
+  let nx=0;for(let i=0;i<n;i++){if(oid.has(i2id[i])){if(xid.has(i2id[i]))nx++;else np[i]=XING_PEN;}}
   const C=60,grid=new Map();for(let i=0;i<n;i++){if(!main[i])continue;const k=Math.floor(x[i]/C)+","+Math.floor(y[i]/C);let a=grid.get(k);if(!a)grid.set(k,a=[]);a.push(i);}
-  return {n,la:Float64Array.from(la),lo:Float64Array.from(lo),x,y,lat0,lon0,kx,ky,off,to,len,wt,main,grid,C,
+  return {n,la:Float64Array.from(la),lo:Float64Array.from(lo),x,y,lat0,lon0,kx,ky,off,to,len,wt,main,grid,C,np,nx,
     gs:new Float64Array(n),par:new Int32Array(n),seen:new Uint32Array(n),closed:new Uint32Array(n),stamp:0};
 }
 const toXY=(g,p)=>[(p[1]-g.lon0)*g.kx,(p[0]-g.lat0)*g.ky];
@@ -552,7 +564,7 @@ function astar(g,s,t,pen){
   seen[s]=st;gs[s]=0;par[s]=-1;push(s,Math.hypot(g.x[s]-tx,g.y[s]-ty));let it=0;
   while(H.length){const u=pop();if(closed[u]===st)continue;closed[u]=st;if(u===t)break;if(++it>400000)return null;
     for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(closed[v]===st)continue;
-      const c=gs[u]+g.len[e]*(g.wt[e]+(pen?pen(u,v):0));
+      const c=gs[u]+g.len[e]*(g.wt[e]+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0);
       if(seen[v]!==st||c<gs[v]){seen[v]=st;gs[v]=c;par[v]=u;push(v,c+Math.hypot(g.x[v]-tx,g.y[v]-ty));}}}
   if(closed[t]!==st) return null;
   const path=[];for(let v=t;v>=0;v=par[v]){path.push(v);if(v===s)break;}return path.reverse();}
@@ -570,10 +582,15 @@ function routeLocal(pts,opt={}){
   let path=[ids[0]];
   for(let k=1;k<ids.length;k++){const seg=astar(g,ids[k-1],ids[k]);if(!seg)throw new Error("경로를 찾지 못했습니다 (로컬 도로망)");path=path.concat(seg.slice(1));}
   return pathOut(g,path,opt);}
-/* 경로 중 노랑·주황(큰길) 구간 비율 — 결과 안내용 */
-function bigShare(coords){const g=GRAPH;if(!g||!coords.length||!inBox(g.box,coords[0]))return null;const r=roadRaster(g);let t=0,b=0;
-  for(let i=1;i<coords.length;i++){const L=hav(coords[i-1],coords[i]);const m=toXY(g,[(coords[i-1][0]+coords[i][0])/2,(coords[i-1][1]+coords[i][1])/2]);t+=L;if(rastAt(r,m[0],m[1])===1)b+=L;}
-  return t?b/t:null;}
+/* 경로 통계: 주황·노랑 구간 비율, 건널목 아닌 곳의 주황 도로 횡단 수 (그래프 노드 좌표로 역매핑) */
+function routeStats(coords){const g=GRAPH;if(!g||!coords.length||!inBox(g.box,coords[0]))return null;
+  if(!g.ll2i){g.ll2i=new Map();for(let i=0;i<g.n;i++)g.ll2i.set(g.la[i]+","+g.lo[i],i);}
+  const id=coords.map(c=>g.ll2i.get(c[0]+","+c[1]));let t=0,o=0,y=0,xb=0;const xp=[];
+  const ew=(a,b)=>{for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b)return e;return -1;};
+  for(let k=1;k<coords.length;k++){const L=hav(coords[k-1],coords[k]);t+=L;const a=id[k-1],b=id[k];if(a==null||b==null)continue;const e=ew(a,b);if(e<0)continue;
+    if(g.wt[e]>=ORANGE_W)o+=L;else if(g.wt[e]>=BIG_W)y+=L;else if(g.np[b]>0){xb++;xp.push(coords[k]);}}
+  return t?{orange:o/t,yellow:y/t,xbad:xb,xp}:null;}
+function bigShare(coords){const r=routeStats(coords);return r?r.orange+r.yellow:null;}
 
 /* ---------- Sketch run v2 : 로컬 도로망 위에서만, 위치·크기·각도 탐색 ----------
    1) 도로 래스터(12m, 24m 팽창): 2=흰 도로·보행로, 1=큰길, 0=도로 없음(강·공원·건물)
@@ -583,14 +600,14 @@ function bigShare(coords){const g=GRAPH;if(!g||!coords.length||!inBox(g.box,coor
 function roadRaster(g){if(g.rast)return g.rast;const C=12;let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
   for(let i=0;i<g.n;i++){if(!g.main[i])continue;if(g.x[i]<x0)x0=g.x[i];if(g.x[i]>x1)x1=g.x[i];if(g.y[i]<y0)y0=g.y[i];if(g.y[i]>y1)y1=g.y[i];}
   const W=Math.ceil((x1-x0)/C)+1,Hh=Math.ceil((y1-y0)/C)+1,a=new Uint8Array(W*Hh),dir=new Uint8Array(W*Hh);
-  for(let u=0;u<g.n;u++){if(!g.main[u])continue;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u)continue;const val=g.wt[e]>=BIG_W?1:2,st=Math.max(1,Math.ceil(g.len[e]/6));
+  for(let u=0;u<g.n;u++){if(!g.main[u])continue;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(v<u)continue;const val=g.wt[e]>=ORANGE_W?1:g.wt[e]>=BIG_W?2:3,st=Math.max(1,Math.ceil(g.len[e]/6));
     /* 도로 방향 비트(0~180°를 22.5° 8칸) */
     const ang=((Math.atan2(g.x[v]-g.x[u],g.y[v]-g.y[u])*180/Math.PI)+360)%180,bit=1<<(Math.round(ang/22.5)%8);
     for(let s=0;s<=st;s++){const f=s/st,cx=Math.floor((g.x[u]+(g.x[v]-g.x[u])*f-x0)/C),cy=Math.floor((g.y[u]+(g.y[v]-g.y[u])*f-y0)/C),k=cy*W+cx;if(a[k]<val)a[k]=val;dir[k]|=bit;}}}
   const d=new Uint8Array(W*Hh),dd=new Uint8Array(W*Hh),R=1;
   for(let cy=0;cy<Hh;cy++)for(let cx=0;cx<W;cx++){const k0=cy*W+cx,v=a[k0];if(!v)continue;for(let dy=-R;dy<=R;dy++)for(let dx=-R;dx<=R;dx++){const X=cx+dx,Y=cy+dy;if(X<0||Y<0||X>=W||Y>=Hh)continue;const k=Y*W+X;if(d[k]<v)d[k]=v;dd[k]|=dir[k0];}}
   return g.rast={C,x0,y0,W,H:Hh,a:d,dir:dd};}
-/* 획 방향과 나란한(±22.5°) 도로가 있는가: 2=흰 도로, 1=큰길, 0=없음/가로지르는 길뿐 */
+/* 획 방향과 나란한(±22.5°) 도로가 있는가: 3=흰 도로, 2=노랑, 1=주황, 0=없음/가로지르는 길뿐 */
 function rastDir(r,x,y,mask){const cx=Math.floor((x-r.x0)/r.C),cy=Math.floor((y-r.y0)/r.C);if(cx<0||cy<0||cx>=r.W||cy>=r.H)return 0;const k=cy*r.W+cx;return r.dir[k]&mask?r.a[k]:0;}
 function rastAt(r,x,y){const cx=Math.floor((x-r.x0)/r.C),cy=Math.floor((y-r.y0)/r.C);return cx<0||cy<0||cx>=r.W||cy>=r.H?0:r.a[cy*r.W+cx];}
 /* 글자: 시작·끝을 밑줄(y=0)로 — 자기 획을 되짚어(같은 길이라 안 보임) 이동, 글자 사이 연결선은 밑줄 위 */
@@ -645,7 +662,7 @@ async function genSketch(A,maxD,shape,onStep){
       for(let cx=-lim;cx<=lim;cx+=80)for(let cy=-lim;cy<=lim;cy+=80){if(Math.hypot(cx,cy)+half>lim)continue;
         const X=a[0]+cx,Y=a[1]+cy,appr=RF*(Math.hypot(X+st[0]-a[0],Y+st[1]-a[1])+Math.hypot(X+en[0]-a[0],Y+en[1]-a[1])),tot=appr+gp.Lu*s*RF;
         if(tot>maxD*0.98)continue;
-        let hit=0,miss=0;for(let z=0;z<P.length;z++){const q=P[z],v=rastDir(rast,X+q[0],Y+q[1],M[z]);if(v===2)hit++;else if(v===1)hit+=0.75;else if(++miss>maxMiss)break;}
+        let hit=0,miss=0;for(let z=0;z<P.length;z++){const q=P[z],v=rastDir(rast,X+q[0],Y+q[1],M[z]);if(v===3)hit++;else if(v===2)hit+=0.6;else if(v===1)hit+=0.15;else if(++miss>maxMiss)break;}
         if(miss>maxMiss)continue;const cov=hit/P.length;
         cands.push({c:[X,Y],s,th,cov,tot,sc:cov*0.6+(s/sMax)*0.3+(tot/maxD)*0.1});}}}
   if(!cands.length) throw new Error("반경 "+(lim/1000).toFixed(1)+"km 안에 이 모양을 받쳐 줄 도로가 없습니다. 출발지를 바둑판형 도로가 많은 곳으로 옮기거나, 최대 거리를 늘리거나, 글자 수를 줄여 주세요.");
@@ -830,7 +847,8 @@ function draw(res){
   const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
   ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
-  {const bs=bigShare(res.coords);if(bs!=null)ri.textContent+=" · 큰길(노랑·주황) "+Math.round(bs*100)+"%";}
+  {const st=routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
+    res._xp=st.xp;}}
   const css=getComputedStyle(document.documentElement), C1=css.getPropertyValue("--route").trim()||"#6d28d9", C2=css.getPropertyValue("--route-back").trim()||"#0891b2";
   const back=res.sketch?res.coords.map(()=>false):returnMask(res.coords), hasBack=back.some(Boolean);
   if(res.sketch){ /* 스케치: 오가는 길 = 회색 점선, 스케치 본체 = 보라 */
@@ -852,6 +870,7 @@ function draw(res){
     L.marker([a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],{icon:L.divIcon({className:"",iconSize:[16,16],iconAnchor:[8,8],
       html:'<div class="arr" style="transform:rotate('+bearing(a,b).toFixed(0)+'deg)"><svg viewBox="0 0 16 16" width="16" height="16"><path d="M8 1.5 14 14 8 10.5 2 14Z" fill="'+(back[i]?C2:C1)+'" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg></div>'}),interactive:false}).addTo(arrLayer);
     na+=gap;}}
+  (res._xp||[]).forEach(p=>L.marker(p,{icon:L.divIcon({className:"",iconSize:[20,20],iconAnchor:[10,10],html:'<div title="건널목 표시 없는 횡단" style="width:20px;height:20px;border-radius:50%;background:#fff;border:2px solid #d97706;display:grid;place-items:center;font:700 12px sans-serif;color:#d97706">!</div>'}),interactive:false}).addTo(arrLayer));
   map.fitBounds(line.getBounds(),{padding:[24,24]});
   $("#result").hidden=false;
   $("#sDist").textContent=(res.total/1000).toFixed(2);
@@ -877,15 +896,27 @@ async function generate(newSeed){
     if(S.engine==="local"&&state.mode!=="sketch"){
       const ab=state.mode==="a2b"&&state.B, ctr=ab?[(state.A[0]+state.B[0])/2,(state.A[1]+state.B[1])/2]:state.A;
       const need=ab?hav(state.A,state.B)/2+target*0.3:state.mode==="outback"?target*0.55:target*0.38;
-      if(need<=3000){status("도로망 불러오는 중…");try{await loadGraph(ctr,need);}catch(e){status("도로망을 받지 못해 OSRM으로 계산합니다.");}}
+      /* 반경 3km 타일을 항상 준비. 계산 지점이 타일 밖이면 그 계산만 OSRM으로 자동 전환(route()) */
+      status("도로망 불러오는 중…");try{await loadGraph(ctr,Math.min(need,3000));}catch(e){status(e.message+" OSRM으로 계산합니다.");}
     }
     if(state.mode==="sketch") res=await genSketch(state.A,target,shape,step);
     else if($("#useLib").checked&&LIB.length&&!(state.mode==="a2b"&&hav(state.A,state.B)<150))
       res=await genRef(state.mode,state.A,state.B,target,step);
     if(res) ;
-    else if(state.mode==="loop") res=await genLoop(state.A,target,brg,side,step);
-    else if(state.mode==="outback") res=await genOutBack(state.A,target,brg,step);
-    else res=await genA2B(state.A,state.B,target,side,step);
+    else{
+      /* 흰 도로 우선: 로컬 엔진이면 방향을 바꾼 후보 최대 4개 → 주황·노랑 비율·무단횡단·거리오차가 가장 낮은 경로 */
+      const once=(b,sd)=>state.mode==="loop"?genLoop(state.A,target,b,sd,step):state.mode==="outback"?genOutBack(state.A,target,b,step):genA2B(state.A,state.B,target,sd,step);
+      const N=S.engine==="local"&&GRAPH&&inBox(GRAPH.box,state.A)?4:1;let best=null,lastErr=null;
+      for(let k=0;k<N;k++){
+        const b=k?(dirSel!==""?(+dirSel+rnd(-25,25)+360)%360:rnd(0,360)):brg,sd=k?(Math.random()<0.5?-1:1):side;
+        let r;try{r=await once(b,sd);}catch(e){lastErr=e;continue;}
+        const st=routeStats(r.coords),sc=(st?st.orange*3+st.yellow+st.xbad*0.03:0)+Math.max(0,Math.abs(r.err)-TOL)*4;
+        if(!best||sc<best.sc)best={r,sc};
+        if(st&&st.orange<0.02&&st.yellow<0.05&&!st.xbad&&Math.abs(r.err)<=TOL)break;
+        if(k<N-1)step("흰 도로 위주 후보 비교 "+(k+2)+"/"+N,r.total);
+      }
+      if(!best)throw lastErr||new Error("경로를 만들지 못했습니다.");
+      res=best.r;}
     res.coords=thin(res.coords); res.fam=familiar(res.coords);
     if(!res.sketch){res.ut=badUturns(res.coords,res.ref,res.turn?[res.turn]:[]).length; if(res.key) lastRef=res.key;}
     cur=res; draw(res);
