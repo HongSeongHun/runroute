@@ -364,3 +364,11 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - OSM 타일이 10초 안에 6번 넘게 실패(성공보다 많음)하면 OSM 프랑스 타일로 자동 전환(하루 뒤 다시 기본 서버 시도).
 - 지도 옵션: 캔버스 렌더러, keepBuffer 4, 확대 중 타일 갱신 안 함, 휠 감도 완화.
 - 백업: index.v28.html.
+
+## v28 변경 (2026-10-30) — 바탕 지도를 Mac에 보관, 휴대폰은 Mac에서 가져오기(위치 기반)
+- OSMF 타일 정책상 tile.openstreetmap.org 타일을 미리 받아 두거나(오프라인 저장) 캐시 프록시로 보관하는 것은 금지/비권장 → OSM 표준 타일을 Mac에 쌓지 않음. `sw.js`도 OSM 타일 저장을 빼고 라이브러리만 캐시.
+- 대신 Protomaps 일일 빌드(OpenStreetMap 데이터, ODbL)에서 지역만 잘라 Mac `~/.runroute/maps/*.pmtiles`로 보관(`pmtiles extract`). 호치민(10.65~10.90, 106.55~106.85, z0~15) = 14.3MB, 944조각.
+- 중계: `/maps/index.json`(지역 목록), `/maps/<파일>.pmtiles`(Range 지원·CORS), `/maps/ensure?lat&lon`(키 필요, 그 위치 ±0.15° 지역을 백그라운드로 새로 저장).
+- 앱: 화면 중심이 Mac 보관 지역 안이면 protomaps-leaflet 5.1.0으로 벡터 지도 표시(한국어 이름 우선), 밖이면 기존 래스터 지도 + Mac에 그 지역 저장 요청(10분에 1번). 중계에 못 닿으면 래스터 유지.
+- 측정: 테일넷 Range 16KB 0.02초. E2E(z16 화면): Range 6회 153KB.
+- 백업: index.v29.html.

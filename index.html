@@ -1241,10 +1241,27 @@ const map=L.map("map",{zoomControl:true,preferCanvas:true,wheelPxPerZoomLevel:90
 const TILE_OPT={maxZoom:19,keepBuffer:4,updateWhenZooming:false,updateWhenIdle:true,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'};
 const TILE_SRC=[{url:"https://tile.openstreetmap.org/{z}/{x}/{y}.png",o:{}},{url:"https://{s}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png",o:{subdomains:"abc",maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · 타일 OSM France'}}];
 let tileIdx=+load("tileIdx",0)||0,tileLayer=null;
-function setTiles(i){if(tileLayer)tileLayer.remove();tileIdx=i;save("tileIdx",i);const S2=TILE_SRC[i];tileLayer=L.tileLayer(S2.url,{...TILE_OPT,...S2.o}).addTo(map);tileLayer.bringToBack();
+function setTiles(i){if(tileLayer)tileLayer.remove();if(typeof vecLayer!=="undefined"&&vecLayer){tileIdx=i;return;}tileIdx=i;save("tileIdx",i);const S2=TILE_SRC[i];tileLayer=L.tileLayer(S2.url,{...TILE_OPT,...S2.o}).addTo(map);tileLayer.bringToBack();
   let err=0,ok=0,t0=Date.now();tileLayer.on("tileload",()=>{ok++;});tileLayer.on("tileerror",()=>{if(Date.now()-t0>10000){t0=Date.now();err=0;ok=0;}err++;
     if(i===0&&err>=6&&err>ok){status("기본 지도 서버 연결이 불안정해 다른 지도 서버로 바꿨습니다.");setTiles(1);}});}
 setTiles(tileIdx===1&&Date.now()-(+load("tileIdxT",0)||0)>864e5?0:tileIdx);if(tileIdx===1)save("tileIdxT",Date.now());
+/* Mac 보관 벡터 지도(우선 사용): 중계 서버 /maps/index.json 의 지역 파일 중 화면 중심이 들어 있는 것을 Range 요청으로 읽어 휴대폰에서 그림.
+   지역 밖으로 나가면 기존 래스터 타일로 돌아가고, Mac에 그 위치 주변 지역 파일을 만들어 달라고 요청(위치 기반) */
+var vecLayer=null,vecFile=null,vecRegions=null,vecLib=null,lastEnsure=0;
+const relayBase=()=>(S.relayUrl||"").trim().replace(/\/+$/,"");
+function loadVecLib(){if(vecLib)return vecLib;vecLib=new Promise((ok,no)=>{const sc=document.createElement("script");sc.src="https://unpkg.com/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js";sc.onload=()=>ok(window.protomapsL);sc.onerror=no;document.head.appendChild(sc);});return vecLib;}
+async function vecRefresh(){const base=relayBase();if(!base)return;
+  try{if(!vecRegions){const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),4000);const r=await fetch(base+"/maps/index.json",{signal:ctl.signal});clearTimeout(tm);if(!r.ok)return;vecRegions=(await r.json()).regions||[];}
+    const c=map.getCenter(),R=vecRegions.find(r=>c.lat>=r.bbox[0]&&c.lat<=r.bbox[2]&&c.lng>=r.bbox[1]&&c.lng<=r.bbox[3]);
+    if(!R){if(vecLayer){vecLayer.remove();vecLayer=null;vecFile=null;if(!tileLayer||!map.hasLayer(tileLayer))setTiles(tileIdx);}
+      if(Date.now()-lastEnsure>600000&&S.relayKey){lastEnsure=Date.now();fetch(base+"/maps/ensure?lat="+c.lat.toFixed(3)+"&lon="+c.lng.toFixed(3),{headers:{"X-RR-Key":S.relayKey.trim()}}).then(r=>r.json()).then(j=>{if(j.started)status("이 지역 지도를 Mac에 저장하는 중입니다(몇 분 소요). 그동안은 일반 지도를 씁니다.");setTimeout(()=>{vecRegions=null;},180000);}).catch(()=>{});}
+      return;}
+    if(vecFile===R.file)return;const P=await loadVecLib();
+    const lay=P.leafletLayer({url:base+"/maps/"+R.file+"?v="+R.mtime,flavor:"light",lang:"ko",maxDataZoom:15,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> · <a href="https://protomaps.com">Protomaps</a> · Mac 보관 지도'});
+    if(vecLayer)vecLayer.remove();vecLayer=lay.addTo(map);vecLayer.bringToBack&&vecLayer.bringToBack();vecFile=R.file;
+    if(tileLayer){tileLayer.remove();}}
+  catch(e){/* 중계 서버에 못 닿으면(테일스케일 꺼짐 등) 일반 지도 유지 */}}
+map.on("moveend",()=>{vecRefresh();});setTimeout(vecRefresh,0);
 map.on("moveend",()=>{const c=map.getCenter();save("view",[c.lat,c.lng]);save("zoom",map.getZoom());});
 const pin=t=>L.divIcon({className:"",html:'<div class="pin '+t+'">'+(t==="a"?"S":"F")+'</div>',iconSize:[24,24],iconAnchor:[12,12]});
 let mA=null,mB=null,line=null,kmLayer=L.layerGroup().addTo(map),arrLayer=L.layerGroup().addTo(map);

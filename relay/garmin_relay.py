@@ -248,15 +248,58 @@ def warm_loop():
         except Exception: traceback.print_exc()
         time.sleep(24 * 3600)
 
+# ---- 바탕 지도(벡터 타일) Mac 보관 · 휴대폰 제공 (사용자 지정 2026-10-30: 'Mac에 저장 → 휴대폰이 가져오기, 위치 기반') ----
+# Protomaps 일일 빌드(OpenStreetMap 데이터, ODbL)에서 지역만 잘라 ~/.runroute/maps/*.pmtiles 로 보관.
+# 휴대폰은 /maps/index.json 으로 지역 목록을 받고, 화면이 들어 있는 지역 파일을 Range 요청으로 필요한 조각만 읽음.
+MAPS = os.path.expanduser("~/.runroute/maps"); os.makedirs(MAPS, exist_ok=True)
+REGION_HALF = 0.15      # 위치 기반 새 지역: 중심 ±0.15° (약 33km 사방)
+_maps_busy = set()
+def maps_index():
+    out = []
+    meta_f = os.path.join(MAPS, "regions.json")
+    meta = json.load(open(meta_f)) if os.path.exists(meta_f) else {}
+    for f in sorted(os.listdir(MAPS)):
+        if f.endswith(".pmtiles"):
+            m = meta.get(f) or ({"bbox": [10.65, 106.55, 10.90, 106.85], "name": "호치민"} if f == "hcmc.pmtiles" else None)
+            if m: out.append({"file": f, "bbox": m["bbox"], "name": m.get("name", f), "size": os.path.getsize(os.path.join(MAPS, f)), "mtime": int(os.path.getmtime(os.path.join(MAPS, f)))})
+    return {"regions": out, "busy": sorted(_maps_busy)}
+
+def maps_ensure(lat, lon):
+    for r in maps_index()["regions"]:
+        s_, w_, n_, e_ = r["bbox"]
+        if s_ + 0.02 <= lat <= n_ - 0.02 and w_ + 0.02 <= lon <= e_ - 0.02: return {"have": r["file"]}
+    name = f"r_{lat:.2f}_{lon:.2f}.pmtiles".replace("-", "m")
+    if name in _maps_busy: return {"busy": name}
+    _maps_busy.add(name)
+    def job():
+        import subprocess, datetime
+        try:
+            bb = [round(lat - REGION_HALF, 3), round(lon - REGION_HALF, 3), round(lat + REGION_HALF, 3), round(lon + REGION_HALF, 3)]
+            for d in (1, 2, 3):
+                dt = (datetime.date.today() - datetime.timedelta(days=d)).strftime("%Y%m%d")
+                src = f"https://build.protomaps.com/{dt}.pmtiles"
+                tmp = os.path.join(MAPS, name + ".part")
+                r = subprocess.run(["/opt/homebrew/bin/pmtiles", "extract", src, tmp, f"--bbox={bb[1]},{bb[0]},{bb[3]},{bb[2]}", "--maxzoom=15"], capture_output=True, text=True, timeout=900)
+                if r.returncode == 0:
+                    os.replace(tmp, os.path.join(MAPS, name))
+                    meta_f = os.path.join(MAPS, "regions.json"); meta = json.load(open(meta_f)) if os.path.exists(meta_f) else {}
+                    meta[name] = {"bbox": bb, "name": f"{lat:.2f},{lon:.2f} 주변", "src": dt}; json.dump(meta, open(meta_f, "w"), ensure_ascii=False)
+                    sys.stderr.write(f"[maps] {name} 저장 ({os.path.getsize(os.path.join(MAPS, name))} bytes)\n"); break
+        except Exception: traceback.print_exc()
+        finally: _maps_busy.discard(name)
+    threading.Thread(target=job, daemon=True).start()
+    return {"started": name}
+
 class H(BaseHTTPRequestHandler):
     def cors(self):
         o = self.headers.get("Origin")
         if o in ALLOWED_ORIGINS or (o or "").startswith("http://localhost") or (o or "").startswith("http://127.0.0.1"):
             self.send_header("Access-Control-Allow-Origin", o)
             self.send_header("Vary", "Origin")
-            self.send_header("Access-Control-Allow-Headers", "content-type, x-rr-key")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.send_header("Access-Control-Expose-Headers", "Content-Range, Accept-Ranges, Content-Length, ETag")
+            self.send_header("Access-Control-Allow-Headers", "content-type, x-rr-key, range, if-match")
     def reply(self, code, obj):
         b = json.dumps(obj, ensure_ascii=False).encode()
         self.send_response(code); self.cors(); self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -266,7 +309,37 @@ class H(BaseHTTPRequestHandler):
     def authed(self):
         if secrets.compare_digest(self.headers.get("X-RR-Key", ""), relay_key()): return True
         self.reply(401, {"error": "중계 키가 맞지 않습니다"}); return False
+    def send_map_file(self, fn, head=False):
+        fp = os.path.join(MAPS, os.path.basename(fn))
+        if not fn.endswith(".pmtiles") or not os.path.exists(fp): return self.reply(404, {"error": "no map"})
+        size = os.path.getsize(fp); etag = f'"{int(os.path.getmtime(fp))}-{size}"'
+        rng = self.headers.get("Range"); start, end = 0, size - 1; code = 200
+        if rng and rng.startswith("bytes="):
+            a, b = rng[6:].split(",")[0].split("-")
+            if a == "": start = max(0, size - int(b))
+            else: start = int(a); end = min(size - 1, int(b)) if b else size - 1
+            code = 206
+        n = max(0, end - start + 1)
+        self.send_response(code); self.cors()
+        self.send_header("Content-Type", "application/octet-stream"); self.send_header("Accept-Ranges", "bytes")
+        self.send_header("ETag", etag); self.send_header("Cache-Control", "public, max-age=86400")
+        if code == 206: self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Content-Length", str(n)); self.end_headers()
+        if head: return
+        with open(fp, "rb") as f: f.seek(start); self.wfile.write(f.read(n))
+    def do_HEAD(self):
+        if self.path.startswith("/maps/") and self.path.split("?")[0].endswith(".pmtiles"): return self.send_map_file(self.path.split("?")[0][6:], head=True)
+        self.send_response(404); self.end_headers()
     def do_GET(self):
+        p0 = self.path.split("?")[0]
+        if p0 == "/maps/index.json": return self.reply(200, maps_index())
+        if p0.startswith("/maps/") and p0.endswith(".pmtiles"): return self.send_map_file(p0[6:])
+        if p0 == "/maps/ensure":
+            if not self.authed(): return
+            from urllib.parse import urlparse, parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try: return self.reply(200, maps_ensure(float(q["lat"]), float(q["lon"])))
+            except Exception as ex: return self.reply(400, {"error": str(ex)})
         if self.path.rstrip("/") in ("", "/health"):
             if not self.authed(): return
             try: self.reply(200, {"ok": True, "garmin": garmin().get_full_name()})
