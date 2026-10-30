@@ -319,3 +319,9 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - `zoneRoute`: 구역 안은 '동네 골목' 랜덤워크 대신, 지정 도로 양 끝(앵커)을 예산 안에서 하나씩 끼워 넣어 지정 도로 거리를 최대화. 같은 길·반대 차로 되짚기가 120m(앵커 왕복)/200m(기존 경로) 넘는 앵커는 제외. 실패 시 기존 genWalk로 대체.
 - 실데이터 시험(1군·Thủ Thiêm 그래프, 북쪽 진입→남서쪽 이탈): 지정 도로 비율 58~64%(이전 17~19%), 최종 오차 ±0.5% 이내. 구역에서 되짚기 없이 쓸 수 있는 거리는 약 12.6km까지이며, 그 이상 남는 거리는 도착 지점 직진 연장으로 채움.
 - 백업: index.v22.html.
+
+## v22 변경 (2026-10-30) — 공원 회피 · Garmin 공개 러닝 코스 참조 · Thủ Thiêm 테크콤 주로
+- **공원 회피**: Overpass 질의에 `leisure=park|garden`(way·relation) 추가 → 폴리곤 안 도로 구간은 탐색 비용 ×4(`g.cm`), 동네 골목 걷기 벌점 +4. 도로 등급(wt)은 그대로라 주황/노랑 판정에 영향 없음. 사용자가 그린 선호 경로(빨간 선)는 공원 안이어도 예외. PMH 실측(선호 경로 제외 공원 안 비율): 8km 4.4%→0.9%, 10km 1.2%→0%, 12km 0.9%→0%.
+- **Garmin 공개 러닝 코스 참조**: 중계 `GET /popular?s&w&n&e&max` 추가. Garmin Connect 코스 탐색과 같은 `/course-service/course/search`(호출당 50개)를 4분할 반복(최대 85회)해 범위 안 공개 코스를 모으고, 러닝 종류만·내 코스 제외 → 상세 geoPoints(20m 간격으로 축약)를 `~/.runroute/gcache/`에 1회만 저장(0.4s 간격 백그라운드 수집). 앱은 25m 격자에 코스 수를 세어 흰 도로 탐색 비용을 최대 35% 낮춤. PMH 범위: 러닝 공개 코스 374개 확인. 참고: Garmin 비공개(문서화되지 않은) 웹 API이므로 예고 없이 바뀔 수 있음.
+- **Thủ Thiêm 테크콤 주로**: RUN_ZONES 를 2개로 분리. Thủ Thiêm 구역 = 2025-12-07 HCMC International Marathon(Techcombank) 공식 풀코스 지도의 Thủ Thiêm 구간 도로(Cầu Thủ Thiêm, Nguyễn Cơ Thạch, Nguyễn Thiện Thành, Cầu Ba Son, Trần Bạch Đằng=Đại lộ Vòng Cung, Đường N12, Mai Chí Thọ(보행 가능 구간), Bùi Thiện Ngộ). 주로가 아닌 Tố Hữu는 제외. 이 구역을 지나는 경우에만 적용. 실데이터 시험: 주로 비율 80~85%.
+- 백업: index.v23.html.

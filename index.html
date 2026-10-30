@@ -581,7 +581,7 @@ async function loadGraph(center,need){
   if(GRAPH&&GRAPH.key===key) return GRAPH;
   const box=boxAround(cc,r+800);
   const bb=box.map(v=>v.toFixed(4)).join(",");
-  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;';
+  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;(way["leisure"~"^(park|garden)$"]('+bb+');rel["leisure"~"^(park|garden)$"]('+bb+'););out geom qt;';
   const ckey="https://runroute.local/osm?"+encodeURIComponent(q);
   let txt=null,cache=null,last="";
   try{cache=await caches.open("rr-osm-v2");const hit=await cache.match(ckey);
@@ -645,9 +645,50 @@ function buildGraph(j){
   const C=60,grid=new Map();for(let i=0;i<n;i++){if(!main[i])continue;const k=Math.floor(x[i]/C)+","+Math.floor(y[i]/C);let a=grid.get(k);if(!a)grid.set(k,a=[]);a.push(i);}
   const G0={n,la:Float64Array.from(la),lo:Float64Array.from(lo),x,y,lat0,lon0,kx,ky,off,to,len,wt,ecls,ename,main,grid,C,np,nx,
     gs:new Float64Array(n),par:new Int32Array(n),seen:new Uint32Array(n),closed:new Uint32Array(n),stamp:0};
-  applyBlocks(G0);return G0;
+  applyParks(G0,j);applyBlocks(G0);return G0;
 }
 const toXY=(g,p)=>[(p[1]-g.lon0)*g.kx,(p[0]-g.lat0)*g.ky];
+/* Garmin 공개 러닝 코스 참조(사용자 요청 2026-10-30): Mac 중계 /popular 로 그래프 범위 안 다른 사람들의 공개 러닝 코스 선을 받아
+   25m 격자에 '몇 개 코스가 지나갔나'를 세고, 흰 도로 구간은 그 수에 따라 탐색 비용을 낮춤(최대 35%↓). 공원 회피·공사 구간·주황 회피가 우선. */
+const POP_CACHE=new Map();
+async function fetchPopular(box){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();if(!base||!key)return null;
+  const k=box.map(v=>v.toFixed(3)).join(",");const hit=POP_CACHE.get(k);if(hit&&!hit.crawling)return hit;
+  const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),15000);
+  try{const r=await fetch(base+"/popular?s="+box[0].toFixed(4)+"&w="+box[1].toFixed(4)+"&n="+box[2].toFixed(4)+"&e="+box[3].toFixed(4)+"&max=400",{headers:{"X-RR-Key":key},signal:ctl.signal});
+    if(!r.ok)return hit||null;const j=await r.json();POP_CACHE.set(k,j);return j;}catch(e){return hit||null;}finally{clearTimeout(tm);}}
+function applyPopular(g,P){if(!P||!P.courses||!P.courses.length)return 0;if(g.popN===P.courses.length)return g.popN;
+  g.cm=g.cm||new Float32Array(g.to.length).fill(1);if(g.popBase)g.cm.set(g.popBase);else g.popBase=Float32Array.from(g.cm);
+  const cnt=new Map(),C=25;
+  for(const c of P.courses){const seen=new Set();const pts=c.pts;
+    for(let i=1;i<pts.length;i++){const [x1,y1]=toXY(g,pts[i-1]),[x2,y2]=toXY(g,pts[i]),d=Math.hypot(x2-x1,y2-y1),n=Math.max(1,Math.ceil(d/10));
+      for(let k=0;k<=n;k++){const ck=Math.floor((x1+(x2-x1)*k/n)/C)+","+Math.floor((y1+(y2-y1)*k/n)/C);if(!seen.has(ck)){seen.add(ck);cnt.set(ck,(cnt.get(ck)||0)+1);}}}}
+  g.pop=new Float32Array(g.to.length);
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e],cx=Math.floor((g.x[u]+g.x[v])/2/C),cy=Math.floor((g.y[u]+g.y[v])/2/C);let m=0;
+    for(let dx=-1;dx<=1;dx++)for(let dy=-1;dy<=1;dy++){const c=cnt.get((cx+dx)+","+(cy+dy));if(c>m)m=c;}
+    g.pop[e]=m;if(m&&g.wt[e]<BIG_W)g.cm[e]*=Math.max(0.65,1-0.06*Math.min(m,6));}
+  g.wcls=null;g.popN=P.courses.length;g.popInfo={n:P.courses.length,found:P.found,crawling:P.crawling};return g.popN;}
+async function usePopular(g){if(!g)return null;try{const P=await fetchPopular(g.box);if(P)applyPopular(g,P);return g.popInfo||null;}catch(e){return null;}}
+/* 공원 회피(사용자 지정 2026-10-30): 공원·정원 안 산책로는 갈림길이 많아 코스가 헷갈림 → 금지는 아니고 강하게 회피.
+   leisure=park|garden 폴리곤(way + multipolygon 외곽) 안에 중점이 있는 도로 구간: 탐색 비용 배수 g.cm×PARK_W(도로 등급 wt는 그대로), 동네 골목 걷기 클래스 벌점 +PARK_WALK */
+const PARK_W=4,PARK_WALK=4;
+function parkRings(j){const rings=[];const ring=pts=>{if(pts.length>=4)rings.push(pts);};
+  for(const e of j.elements||[]){const t=e.tags||{};if(!/^(park|garden)$/.test(t.leisure||""))continue;
+    if(e.type==="way"&&e.geometry){const p=e.geometry.filter(Boolean);if(p.length&&p[0].lat===p.at(-1).lat&&p[0].lon===p.at(-1).lon)ring(p);}
+    else if(e.type==="relation"&&e.members){let segs=e.members.filter(m=>m.type==="way"&&m.role!=="inner"&&m.geometry).map(m=>m.geometry.filter(Boolean));
+      while(segs.length){let cur=segs.shift();let grown=true;
+        while(grown&&!(cur[0].lat===cur.at(-1).lat&&cur[0].lon===cur.at(-1).lon)){grown=false;
+          for(let i=0;i<segs.length;i++){const s=segs[i],e0=cur.at(-1);
+            if(s[0].lat===e0.lat&&s[0].lon===e0.lon){cur=cur.concat(s.slice(1));segs.splice(i,1);grown=true;break;}
+            if(s.at(-1).lat===e0.lat&&s.at(-1).lon===e0.lon){cur=cur.concat(s.slice(0,-1).reverse());segs.splice(i,1);grown=true;break;}}}
+        if(cur[0].lat===cur.at(-1).lat&&cur[0].lon===cur.at(-1).lon)ring(cur);}}}
+  return rings;}
+function applyParks(g,j){g.cm=g.cm||new Float32Array(g.to.length).fill(1);const rings=parkRings(j);g.park=new Uint8Array(g.to.length);g.parkN=rings.length;if(!rings.length)return;
+  const polys=rings.map(r=>{const xs=r.map(p=>(p.lon-g.lon0)*g.kx),ys=r.map(p=>(p.lat-g.lat0)*g.ky);
+    return {xs,ys,x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};});
+  const inside=(P,x,y)=>{if(x<P.x0||x>P.x1||y<P.y0||y>P.y1)return false;let c=false;const {xs,ys}=P;
+    for(let i=0,k=xs.length-1;i<xs.length;k=i++)if((ys[i]>y)!==(ys[k]>y)&&x<(xs[k]-xs[i])*(y-ys[i])/(ys[k]-ys[i])+xs[i])c=!c;return c;};
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e],mx=(g.x[u]+g.x[v])/2,my=(g.y[u]+g.y[v])/2;
+    for(const P of polys)if(inside(P,mx,my)){g.park[e]=1;g.cm[e]*=PARK_W;break;}}}
 const toLL=(g,q)=>[g.lat0+q[1]/g.ky,g.lon0+q[0]/g.kx];
 function nearestNode(g,p,maxR=500,isXY=false){const [px,py]=isXY?p:toXY(g,p);const cx=Math.floor(px/g.C),cy=Math.floor(py/g.C),K=Math.ceil(maxR/g.C)+1;let bi=-1,bd=Infinity;
   for(let r=0;r<=K;r++){for(let dx=-r;dx<=r;dx++)for(let dy=-r;dy<=r;dy++){if(Math.max(Math.abs(dx),Math.abs(dy))!==r)continue;const a=g.grid.get((cx+dx)+","+(cy+dy));if(!a)continue;
@@ -663,7 +704,7 @@ function astar(g,s,t,pen){
   seen[s]=st;gs[s]=0;par[s]=-1;push(s,Math.hypot(g.x[s]-tx,g.y[s]-ty));let it=0;
   while(H.length){const u=pop();if(closed[u]===st)continue;closed[u]=st;if(u===t)break;if(++it>400000)return null;
     for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(closed[v]===st||(g.blk&&g.blk[e]))continue;
-      const c=gs[u]+g.len[e]*(g.wt[e]+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0);
+      const c=gs[u]+g.len[e]*(g.wt[e]*(g.cm?g.cm[e]:1)+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0);
       if(seen[v]!==st||c<gs[v]){seen[v]=st;gs[v]=c;par[v]=u;push(v,c+Math.hypot(g.x[v]-tx,g.y[v]-ty));}}}
   if(closed[t]!==st) return null;
   const path=[];for(let v=t;v>=0;v=par[v]){path.push(v);if(v===s)break;}return path.reverse();}
@@ -833,6 +874,8 @@ function prefApply(g){const pts=prefPoints(),key=pts.length+":"+pts.slice(0,3).j
   let zones=[...zm.values()].filter(z=>z.L>=150);
   zones.forEach((z,id)=>{z.id=id;z.nodes=[...z.nodes];z.cx=z.sx/z.L;z.cy=z.sy/z.L;z.R=Math.max(...z.nodes.map(i=>Math.hypot(g.x[i]-z.cx,g.y[i]-z.cy)));z.nodes.forEach(i=>{if(zoneOf[i]<0)zoneOf[i]=id;});});
   const edgeZone=new Int32Array(m).fill(-1);for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(!pref[e])continue;const v=g.to[e],z=zm.get((prio[e]?"p":"n")+Math.floor((g.x[u]+g.x[v])/2/PG)+","+Math.floor((g.y[u]+g.y[v])/2/PG));if(z&&z.id!=null)edgeZone[e]=z.id;}
+  /* 사용자가 직접 표시한 선호 경로(빨간 선)는 공원 안이어도 회피하지 않음 */
+  if(g.park){let ch=0;for(let e=0;e<m;e++)if(pref[e]&&g.park[e]){g.park[e]=0;g.cm[e]/=PARK_W;if(g.popBase)g.popBase[e]/=PARK_W;ch++;}if(ch)g.wcls=null;}
   g.prefKey=key;return g.prefInfo={pref,zones,zoneOf,edgeZone};}
 function stepOK(g,e,v){if(g.blk&&g.blk[e])return false;const w=g.wt[e];if(w>=ORANGE_W)return g.len[e]<=45;return !(g.np[v]>0);}
 function distField(g,s,lim){const n=g.n,d=new Float64Array(n).fill(Infinity),H=[],F=[];
@@ -851,7 +894,7 @@ function deadEnds(g){if(g.dead)return g.dead;const n=g.n,dg=new Int32Array(n),de
 /* 동네 골목 루프용 도로 선호(지도상 '흰 도로' 중에서도): 주거지·일반 도로 0, 보행자 거리 0.6, 보행로·산책로·서비스 도로 1.6, 계단 3 */
 const WALK_CLS={residential:0,living_street:0,unclassified:0,tertiary:0,tertiary_link:0,pedestrian:0.6,footway:1.6,path:1.6,cycleway:1.6,track:1.6,service:1.6,steps:3};
 function walkCls(g){if(g.wcls)return g.wcls;const m=g.off[g.n],a=new Float32Array(m);/* buildGraph에 way 태그가 없으므로 가중치로 역추정 불가 → 별도 배열 사용 */
-  if(g.ecls){for(let e=0;e<m;e++)a[e]=WALK_CLS[g.ecls[e]]??0.5;}return g.wcls=a;}
+  if(g.ecls){for(let e=0;e<m;e++)a[e]=Math.max(0,(WALK_CLS[g.ecls[e]]??0.5)+(g.park&&g.park[e]?PARK_WALK:0)-(g.pop?0.25*Math.min(g.pop[e],4):0));}return g.wcls=a;}
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 /* 되짚기 감지: 30m 격자에 진행 방향(45° 8칸)을 기록 → 같은 길(또는 왕복 차로가 따로 그려진 평행 차로)을 반대로 지나면 감지 */
 const DCELL=30;
@@ -948,7 +991,7 @@ function genWalk(A,E,target,onStep,opts={}){
    공식 자료 기준 코스 요소: Lê Duẩn–Nguyễn Bỉnh Khiêm 출발(Thảo Cầm Viên), 통일궁·노트르담 성당·중앙우체국, Nguyễn Huệ 보행거리,
    Ba Son 다리, Võ Văn Kiệt 대로, Sala, Thủ Thiêm Empire City 결승. (연도별 세부 코스는 변동)
    구역 안에서는 지정 도로를 흰 도로와 같은 비용으로 보고(큰길이어도) 우선 선호 도로로 포함. */
-const RUN_ZONES=[{"name":"호치민 마라톤 코스(1군 강변·Thủ Thiêm)","short":"마라톤 코스","box":[10.764,106.695,10.794,106.73],"center":[10.778,106.712],"roads":["Lê Duẩn","Đường Lê Duẩn","Nguyễn Bỉnh Khiêm","Công trường Công xã Paris","Đồng Khởi","Nguyễn Huệ","Lê Lợi","Tôn Đức Thắng","Hàm Nghi","Võ Văn Kiệt","Cầu Ba Son","Cầu Thủ Thiêm","Mai Chí Thọ","Tố Hữu","Trần Bạch Đằng","Nguyễn Cơ Thạch"],"verified":false}];  /* box(구역 경계)는 근사값 — Overpass 회복 후 실제 도로 좌표로 검증 예정 */
+const RUN_ZONES=[{"name": "Techcombank 마라톤 주로(Thủ Thiêm)", "short": "테크콤 주로(Thủ Thiêm)", "box": [10.763, 106.709, 10.792, 106.735], "center": [10.777, 106.721], "roads": ["Cầu Thủ Thiêm", "Nguyễn Cơ Thạch", "Nguyễn Thiện Thành", "Cầu Ba Son", "Trần Bạch Đằng", "Đường N12", "Mai Chí Thọ", "Bùi Thiện Ngộ"], "verified": true}, {"name": "호치민 마라톤 코스(1군 강변)", "short": "마라톤 코스(1군)", "box": [10.764, 106.695, 10.794, 106.712], "center": [10.779, 106.703], "roads": ["Lê Duẩn", "Đường Lê Duẩn", "Nguyễn Bỉnh Khiêm", "Công trường Công xã Paris", "Đồng Khởi", "Nguyễn Huệ", "Lê Lợi", "Tôn Đức Thắng", "Hàm Nghi", "Võ Văn Kiệt", "Cầu Ba Son", "Nguyễn Hữu Cảnh"], "verified": true}];  /* 2026-10-30: OSM 실데이터로 이름·범위 검증. Thủ Thiêm = HCMC International Marathon(Techcombank) 2025-12-07 공식 풀코스 지도(사용자 제공) 주로. Đại lộ Vòng Cung = Trần Bạch Đằng(R1). Mai Chí Thọ 자동차전용 구간은 그래프에서 제외됨 */
 function markZone(g,Z){g.zoneRoads=new Set(Z.roads);
   for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++)if(g.zoneRoads.has(g.ename[e])){g.wt[e]=0.5;g.zoneE=g.zoneE||new Uint8Array(g.to.length);g.zoneE[e]=1;g.np[u]=0;g.np[g.to[e]]=0;}
   g.dead=null;g.rast=null;g.prefKey=null;}
@@ -988,6 +1031,7 @@ async function zoneDetour(direct,target,onStep){
     const cd=cumDist(c),Lin=cd[i1]-cd[i0],surplus=target-direct.dist;if(Lin<300||surplus<1000)continue;
     onStep(Z.short+" 구역 도로망 불러오는 중",direct.dist);const saved=GRAPH;let zg=null;
     try{zg=await loadGraph(Z.center,3000);}catch(e){GRAPH=saved;continue;}
+    if(zg)await usePopular(zg);
     try{GRAPH=zg;markZone(zg,Z);onStep(Z.short+" 구역 경로 탐색",direct.dist);await sleep(0);
       let w=zoneRoute(zg,Z,c[i0],c[i1],Lin+surplus,onStep);if(!w)w=genWalk(c[i0],c[i1],Lin+surplus,onStep,{force:true});if(!w)continue;
       const coords=c.slice(0,i0).concat(w.coords,c.slice(i1+1)),total=cumDist(coords).at(-1);
@@ -1213,6 +1257,8 @@ function draw(res){
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
   if(res.zone)ri.textContent+=" · "+res.zone.name+" 구간 "+res.zone.km.toFixed(1)+"km(코스 도로 "+Math.round(res.zone.pref*100)+"%)";
   if(res.spurCuts)ri.textContent+=" · 짧은 우회 "+res.spurCuts+"곳 정리";
+  if(GRAPH&&GRAPH.popInfo)ri.textContent+=" · Garmin 공개 러닝 코스 "+GRAPH.popInfo.n+"개 참조"+(GRAPH.popInfo.crawling?"(추가 "+GRAPH.popInfo.crawling+"개 수집 중)":"");
+  if(GRAPH&&GRAPH.parkN)ri.textContent+=" · 공원 안 길 회피";
   if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
   {const st=routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
     res._xp=st.xp;}}
@@ -1265,6 +1311,7 @@ async function generate(newSeed){
       const need=ab?hav(state.A,state.B)/2+target*0.3:state.mode==="outback"?target*0.55:target*0.38;
       /* 반경 3km 타일을 항상 준비. 계산 지점이 타일 밖이면 그 계산만 OSRM으로 자동 전환(route()) */
       status("도로망 불러오는 중…");try{await loadGraph(ctr,Math.min(need,3000));}catch(e){status(e.message+" OSRM으로 계산합니다.");}
+      if(GRAPH){status("Garmin 공개 러닝 코스 참조 중…");await usePopular(GRAPH);}
     }
     if(GRAPH)renderPref();
     if(state.mode==="sketch") res=await genSketch(state.A,target,shape,step);

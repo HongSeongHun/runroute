@@ -12,6 +12,11 @@
     → /course-service/course/import (GPX 파싱) → /course-service/course (생성, rulePK=1 공개)
     → {"courseId", "url", "rulePK", "name", "distance_m"}
 - GET /health → {"ok": true, "garmin": "<표시 이름>"}
+- GET /popular?s=&w=&n=&e=&max=400 → 그 범위의 다른 사람 '공개' 러닝 코스 선(좌표).
+    Garmin Connect 코스 탐색과 같은 /course-service/course/search?south&west&north&east (호출당 최대 50개)
+    → 결과가 50개로 잘리면 4분할(최대 깊이 4) → 러닝 종류만, 내 코스 제외 → /course-service/course/{id} 상세의 geoPoints.
+    상세는 ~/.runroute/gcache/ 에 저장(코스 하나당 1회만 호출). 미수집분은 백그라운드로 천천히(0.4s 간격) 수집하고
+    응답은 현재까지 수집된 것만 즉시 반환 → {"courses":[{"id","d","pts":[[lat,lon],...]}],"found","cached","crawling"}
 """
 import io, json, math, os, secrets, sys, threading, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -78,6 +83,80 @@ def create_course(name, gpx_text, public=True):
             "rulePK": detail.get("rulePK"), "public": detail.get("rulePK") == RULE_PUBLIC,
             "url": f"https://connect.garmin.com/modern/course/{cid}"}
 
+CACHE = os.path.expanduser("~/.runroute/gcache"); os.makedirs(CACHE, exist_ok=True)
+RUN_TYPES = {"running", "trail_running", "track_running", "street_running", "ultra_run", "obstacle_run"}
+_crawl_lock, _crawling = threading.Lock(), set()
+_mine = {"ids": None}
+
+def my_course_ids(g):
+    if _mine["ids"] is None:
+        try:
+            r = g.client.connectapi("/course-service/course")
+            lst = r if isinstance(r, list) else (r.get("coursesForUser") or r.get("courses") or [])
+            _mine["ids"] = {c.get("courseId") for c in lst}
+        except Exception: _mine["ids"] = set()
+    return _mine["ids"]
+
+def search_cells(g, s, w, n, e, depth=0, out=None, calls=None):
+    out = {} if out is None else out; calls = calls if calls is not None else [0]
+    if calls[0] >= 85: return out
+    calls[0] += 1
+    r = g.client.connectapi("/course-service/course/search", params={"south": s, "west": w, "north": n, "east": e})
+    lst = r.get("courseSummaryDTOs") or []
+    for c in lst: out[c["courseId"]] = c
+    if (r.get("totalSearchHits") or 0) > len(lst) and depth < 4:
+        ms, mw = (s + n) / 2, (w + e) / 2
+        for bb in ((s, w, ms, mw), (s, mw, ms, e), (ms, w, n, mw), (ms, mw, n, e)):
+            search_cells(g, *bb, depth + 1, out, calls)
+    return out
+
+def thin(pts, step=20.0):
+    o = [pts[0]]
+    for p in pts[1:]:
+        if hav({"latitude": o[-1][0], "longitude": o[-1][1]}, {"latitude": p[0], "longitude": p[1]}) >= step: o.append(p)
+    if o[-1] != pts[-1]: o.append(pts[-1])
+    return o
+
+def cached(cid):
+    f = os.path.join(CACHE, f"{cid}.json")
+    if os.path.exists(f):
+        try: return json.load(open(f))
+        except Exception: return None
+    return None
+
+def fetch_detail(g, cid):
+    d = g.client.connectapi(f"/course-service/course/{cid}")
+    gp = d.get("geoPoints") or []
+    pts = [[round(p["latitude"], 6), round(p["longitude"], 6)] for p in gp if p.get("latitude") is not None]
+    rec = {"id": cid, "d": round(d.get("distanceMeter") or 0), "pts": thin(pts) if len(pts) > 1 else []}
+    json.dump(rec, open(os.path.join(CACHE, f"{cid}.json"), "w"))
+    return rec
+
+def crawl(g, ids):
+    import time
+    for cid in ids:
+        with _crawl_lock:
+            if cid in _crawling: continue
+            _crawling.add(cid)
+        try:
+            if cached(cid) is None: fetch_detail(g, cid); time.sleep(0.4)
+        except Exception: traceback.print_exc()
+        finally:
+            with _crawl_lock: _crawling.discard(cid)
+
+def popular(s, w, n, e, mx=400):
+    g = garmin(); mine = my_course_ids(g)
+    found = search_cells(g, s, w, n, e)
+    runs = [c for c in found.values() if (c.get("activityType") or {}).get("typeKey") in RUN_TYPES
+            and c["courseId"] not in mine and (c.get("distanceInMeters") or 0) <= 60000]
+    runs.sort(key=lambda c: -(c.get("updatedDate") or 0)); runs = runs[:mx]
+    have, todo = [], []
+    for c in runs:
+        r = cached(c["courseId"])
+        (have if r else todo).append(r or c["courseId"])
+    if todo: threading.Thread(target=crawl, args=(g, todo), daemon=True).start()
+    return {"courses": [r for r in have if r.get("pts")], "found": len(runs), "cached": len(have), "crawling": len(todo)}
+
 class H(BaseHTTPRequestHandler):
     def cors(self):
         o = self.headers.get("Origin")
@@ -101,6 +180,17 @@ class H(BaseHTTPRequestHandler):
             if not self.authed(): return
             try: self.reply(200, {"ok": True, "garmin": garmin().get_full_name()})
             except Exception as e: self.reply(502, {"error": f"Garmin 로그인 실패: {e}"})
+        elif self.path.startswith("/popular"):
+            if not self.authed(): return
+            from urllib.parse import urlparse, parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try:
+                s_, w_, n_, e_ = (float(q[k]) for k in ("s", "w", "n", "e"))
+                if not (0 < n_ - s_ <= 0.3 and 0 < e_ - w_ <= 0.3): return self.reply(400, {"error": "범위가 너무 큽니다(0.3° 이하)"})
+                self.reply(200, popular(s_, w_, n_, e_, min(int(q.get("max", 400)), 600)))
+            except KeyError: self.reply(400, {"error": "s,w,n,e 필요"})
+            except Exception as ex:
+                traceback.print_exc(); self.reply(502, {"error": f"Garmin 코스 검색 실패: {ex}"})
         else: self.reply(404, {"error": "not found"})
     def do_POST(self):
         if self.path.rstrip("/") != "/course": return self.reply(404, {"error": "not found"})
