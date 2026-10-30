@@ -16,6 +16,7 @@
     Garmin Connect 코스 탐색과 같은 /course-service/course/search?south&west&north&east (호출당 최대 50개)
     → 결과가 50개로 잘리면 4분할(최대 깊이 4) → 러닝 종류만, 내 코스 제외 → /course-service/course/{id} 상세의 geoPoints.
     상세는 ~/.runroute/gcache/ 에 저장(코스 하나당 1회만 호출). 미수집분은 백그라운드로 천천히(0.4s 간격) 수집하고
+    요청 범위 안에 이미 저장된 코스가 ENOUGH(40)개 이상이면 Garmin 검색을 생략하고 저장분만 반환.
     응답은 현재까지 수집된 것만 즉시 반환 → {"courses":[{"id","d","pts":[[lat,lon],...]}],"found","cached","crawling"}
 """
 import io, json, math, os, secrets, sys, threading, traceback
@@ -130,6 +131,7 @@ def fetch_detail(g, cid):
     pts = [[round(p["latitude"], 6), round(p["longitude"], 6)] for p in gp if p.get("latitude") is not None]
     rec = {"id": cid, "d": round(d.get("distanceMeter") or 0), "pts": thin(pts) if len(pts) > 1 else []}
     json.dump(rec, open(os.path.join(CACHE, f"{cid}.json"), "w"))
+    with _idx_lock: idx_add(rec)
     return rec
 
 def crawl(g, ids):
@@ -144,7 +146,35 @@ def crawl(g, ids):
         finally:
             with _crawl_lock: _crawling.discard(cid)
 
+ENOUGH = 40   # 사용자 지정(2026-10-30): 그 주변에 이미 수십 개가 있으면 Garmin 검색 생략
+_idx, _idx_lock = {}, threading.Lock()   # courseId -> (s, w, n, e) 저장된 코스의 범위
+
+def idx_add(rec):
+    p = rec.get("pts") or []
+    if p: _idx[rec["id"]] = (min(a for a, _ in p), min(b for _, b in p), max(a for a, _ in p), max(b for _, b in p))
+
+def idx_load():
+    with _idx_lock:
+        if _idx: return
+        for f in os.listdir(CACHE):
+            if f.endswith(".json"):
+                try: idx_add(json.load(open(os.path.join(CACHE, f))))
+                except Exception: pass
+
+def near_cached(s, w, n, e):
+    """요청 범위와 겹치는 저장 코스 중, 코스 범위의 절반 이상이 요청 범위 안에 있는 것"""
+    idx_load(); out = []
+    for cid, (a, b, c, d) in list(_idx.items()):
+        if c < s or a > n or d < w or b > e: continue
+        ih = max(0, min(c, n) - max(a, s)) * max(0, min(d, e) - max(b, w)); ar = max(1e-12, (c - a) * (d - b))
+        if ih / ar >= 0.5 or ar < 1e-9: out.append(cid)
+    return out
+
 def popular(s, w, n, e, mx=400):
+    have_ids = near_cached(s, w, n, e)
+    if len(have_ids) >= ENOUGH:   # 이미 충분 → Garmin 검색 없이 저장분만 반환
+        recs = [r for r in (cached(i) for i in have_ids[:mx]) if r and r.get("pts")]
+        return {"courses": recs, "found": len(have_ids), "cached": len(recs), "crawling": 0, "skipped_search": True}
     g = garmin(); mine = my_course_ids(g)
     found = search_cells(g, s, w, n, e)
     runs = [c for c in found.values() if (c.get("activityType") or {}).get("typeKey") in RUN_TYPES

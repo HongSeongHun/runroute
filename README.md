@@ -325,3 +325,8 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - **Garmin 공개 러닝 코스 참조**: 중계 `GET /popular?s&w&n&e&max` 추가. Garmin Connect 코스 탐색과 같은 `/course-service/course/search`(호출당 50개)를 4분할 반복(최대 85회)해 범위 안 공개 코스를 모으고, 러닝 종류만·내 코스 제외 → 상세 geoPoints(20m 간격으로 축약)를 `~/.runroute/gcache/`에 1회만 저장(0.4s 간격 백그라운드 수집). 앱은 25m 격자에 코스 수를 세어 흰 도로 탐색 비용을 최대 35% 낮춤. PMH 범위: 러닝 공개 코스 374개 확인. 참고: Garmin 비공개(문서화되지 않은) 웹 API이므로 예고 없이 바뀔 수 있음.
 - **Thủ Thiêm 테크콤 주로**: RUN_ZONES 를 2개로 분리. Thủ Thiêm 구역 = 2025-12-07 HCMC International Marathon(Techcombank) 공식 풀코스 지도의 Thủ Thiêm 구간 도로(Cầu Thủ Thiêm, Nguyễn Cơ Thạch, Nguyễn Thiện Thành, Cầu Ba Son, Trần Bạch Đằng=Đại lộ Vòng Cung, Đường N12, Mai Chí Thọ(보행 가능 구간), Bùi Thiện Ngộ). 주로가 아닌 Tố Hữu는 제외. 이 구역을 지나는 경우에만 적용. 실데이터 시험: 주로 비율 80~85%.
 - 백업: index.v23.html.
+
+## v23 변경 (2026-10-30) — 주변 공개 코스 자동 참조(충분하면 생략) · 화면 문구 '달리기 맵'
+- 맵을 그릴 때마다 출발·도착 주변(로컬 도로망 범위) 공개 러닝 코스를 중계에 요청. 중계는 그 범위에 이미 저장된 코스가 40개 이상이면 Garmin 검색을 생략하고 저장분만 반환(실측 0.2초, PMH 361개). 부족하면 검색 후 백그라운드 수집(신규 지역 실측 2.9초).
+- 화면 문구: '경로' → '달리기 맵/길' (경로 만들기 → 달리기 맵 그리기, 다른 경로 생성 → 다른 맵 그리기, 경로 유형 → 달리기 유형, 경로 스타일 → 맵 스타일, 선호 경로 → 좋아하는 길 등).
+- 백업: index.v24.html.

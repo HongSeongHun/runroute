@@ -96,10 +96,10 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
   <div id="map" role="application" aria-label="지도"></div>
 
   <section class="sheet">
-    <h1>RunRoute <small>OSM 도보 경로 → Garmin 코스</small></h1>
+    <h1>RunRoute <small>달리기 맵 그리기 → Garmin 코스</small></h1>
 
     <div>
-      <label class="lbl">경로 유형</label>
+      <label class="lbl">달리기 유형</label>
       <div class="seg" id="mode">
         <button type="button" data-mode="loop" aria-pressed="true">루프</button>
         <button type="button" data-mode="outback" aria-pressed="false">반환점 왕복</button>
@@ -145,7 +145,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
         <input id="dist" type="number" inputmode="decimal" min="1" max="60" step="0.5" value="10">
       </div>
       <div id="styleBox">
-        <label class="lbl" for="rstyle">경로 스타일</label>
+        <label class="lbl" for="rstyle">맵 스타일</label>
         <select id="rstyle">
           <option value="local">동네 골목 (출발지 근처 흰 도로)</option>
           <option value="wide">넓게 한 바퀴</option>
@@ -171,7 +171,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 
     <label class="chk" id="libRow"><input type="checkbox" id="useLib" checked> 근처 내 Garmin 코스 기반으로 생성 <span class="note" id="libInfo">코스 라이브러리 로딩 중…</span></label>
 
-    <button class="btn primary" type="button" id="go">경로 만들기</button>
+    <button class="btn primary" type="button" id="go">달리기 맵 그리기</button>
     <div class="status" id="status" role="status" aria-live="polite"></div>
 
     <div class="result" id="result" hidden>
@@ -184,16 +184,16 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       <div class="actions" style="grid-template-columns:1fr">
         <button class="btn primary" type="button" id="share">Garmin 공유</button>
       </div>
-      <button class="btn" type="button" id="again">다른 경로 생성</button>
+      <button class="btn" type="button" id="again">다른 맵 그리기</button>
       <p class="note">Garmin 공유: Garmin Connect에 공개 코스로 등록하고 코스 링크를 복사합니다. (Strava 공유는 추후 추가)</p>
     </div>
 
     <details id="prefBox">
-      <summary>선호 경로 (달리기 좋은 곳)</summary>
+      <summary>좋아하는 길 (달리기 좋은 곳)</summary>
       <div class="inner">
         <span class="note">빨간 선 근처(25m) 흰·노랑 도로를 선호합니다. 동네 골목 스타일에서 목표 10km 이상이면 거리 안에서 가까운 곳부터 반드시 포함합니다.</span>
         <label class="chk"><input type="checkbox" id="prefShow"> 지도에 표시 (기본 꺼짐)</label>
-        <label class="chk"><input type="checkbox" id="prefSeed"> 기본 선호 경로 사용 (푸미흥·떤미·푸투언, 2026-10-29 표시)</label>
+        <label class="chk"><input type="checkbox" id="prefSeed"> 기본 좋아하는 길 사용 (푸미흥·떤미·푸투언, 2026-10-29 표시)</label>
         <div class="actions">
           <button class="btn" type="button" id="prefDraw">지도에 그리기</button>
           <button class="btn" type="button" id="prefUndo">마지막 획 취소</button>
@@ -204,7 +204,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
     </details>
 
     <details>
-      <summary>경로 엔진 설정</summary>
+      <summary>맵 그리기 엔진 설정</summary>
       <div class="inner">
         <label class="chk"><input type="checkbox" id="cut"> 불필요한 우회 제거 (막다른 가지·블록 돌기)</label>
         <label class="lbl" for="relayUrl">Garmin 중계 주소 (Mac, Tailscale)</label>
@@ -221,11 +221,11 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
         <input id="osrmBase" spellcheck="false">
         <label class="lbl" for="ghKey">GraphHopper API 키</label>
         <input id="ghKey" spellcheck="false" placeholder="graphhopper.com에서 발급">
-        <span class="note">로컬 도로망: 생성 시 주변 도로(반경 2~3km)를 Overpass에서 1회 받아 7일 캐시. 흰 도로 우선, 노랑 1.8배·주황 4~6배 비용으로 회피, 주황 도로는 건널목·신호등 지점에서 횡단(건널목 표시가 없으면 ⚠ 표시). 범위를 넘는 긴 경로는 OSRM으로 자동 전환. 허용 오차 ±3%.</span>
+        <span class="note">로컬 도로망: 생성 시 주변 도로(반경 2~3km)를 Overpass에서 1회 받아 7일 캐시. 흰 도로 우선, 노랑 1.8배·주황 4~6배 비용으로 회피, 주황 도로는 건널목·신호등 지점에서 횡단(건널목 표시가 없으면 ⚠ 표시). 범위를 넘는 긴 맵은 OSRM으로 자동 전환. 허용 오차 ±3%.</span>
       </div>
     </details>
 
-    <p class="note">지도·경로 데이터 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자 · 경로 FOSSGIS OSRM · 검색 Nominatim · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">지도 오류 신고</a></p>
+    <p class="note">지도·길 데이터 © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> 기여자 · 길 찾기 FOSSGIS OSRM · 검색 Nominatim · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">지도 오류 신고</a></p>
   </section>
 </div>
 
@@ -290,10 +290,10 @@ async function routeNet(pts,opt={}){
   }
   const url=S.osrmBase.replace(/\/$/,"")+"/"+pts.map(p=>p[1].toFixed(6)+","+p[0].toFixed(6)).join(";")+"?overview=full&geometries=geojson"+(opt.cs===false?"":(S.cut?"&continue_straight=false":"&continue_straight=true"))+"&steps="+(opt.steps?"true":"false");
   const r=await fetch(url);
-  if(r.status===429) throw new Error("경로 서버 요청 한도 초과입니다. 잠시 후 다시 시도해 주세요.");
-  if(!r.ok) throw new Error("경로 서버 응답 오류 ("+r.status+")");
+  if(r.status===429) throw new Error("길 찾기 서버 요청 한도 초과입니다. 잠시 후 다시 시도해 주세요.");
+  if(!r.ok) throw new Error("길 찾기 서버 응답 오류 ("+r.status+")");
   const j=await r.json();
-  if(j.code!=="Ok"||!j.routes||!j.routes.length) throw new Error("경로를 찾지 못했습니다 ("+(j.code||"unknown")+")");
+  if(j.code!=="Ok"||!j.routes||!j.routes.length) throw new Error("길을 찾지 못했습니다 ("+(j.code||"unknown")+")");
   const out={dist:j.routes[0].distance, coords:j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]])};
   if(opt.steps) out.ix=j.routes[0].legs.flatMap(l=>l.steps.flatMap(st=>(st.intersections||[]).map(x=>({loc:[x.location[1],x.location[0]],b:x.bearings,inn:x.in}))));
   return detour(out,opt);
@@ -328,8 +328,8 @@ async function avoidBlocks(r,opt={}){
     cands.sort((u,v)=>(hav(P,u)+hav(u,Q))-(hav(P,v)+hav(v,Q)));let ok=false;
     for(const via of cands.slice(0,6)){let s2;try{s2=await routeNet([P,via,Q],{});}catch(e){continue;}
       if(!blockHit(s2.coords)){const nc=c.slice(0,a).concat(s2.coords,c.slice(b+1));r={...r,coords:nc,dist:cumDist(nc).at(-1)};ok=true;break;}}
-    if(!ok)throw new Error("공사(통행 불가) 구간을 피하는 경로를 찾지 못했습니다. 출발·도착지를 옮겨 다시 시도해 주세요.");}
-  if(blockHit(r.coords))throw new Error("공사(통행 불가) 구간을 피하는 경로를 찾지 못했습니다.");
+    if(!ok)throw new Error("공사(통행 불가) 구간을 피하는 길을 찾지 못했습니다. 출발·도착지를 옮겨 다시 시도해 주세요.");}
+  if(blockHit(r.coords))throw new Error("공사(통행 불가) 구간을 피하는 길을 찾지 못했습니다.");
   return r;}
 /* 모든 엔진 결과에 우회 정리 적용 → 거리 보정(fit/fitAdd/cleanup)도 정리된 거리 기준 */
 function detour(out,opt){
@@ -720,7 +720,7 @@ function routeLocal(pts,opt={}){
   const g=GRAPH,ids=[];
   for(const p of pts){const i=nearestNode(g,p,600);if(i<0)throw new Error("도로가 없는 지점입니다. 지점을 도로 가까이로 옮겨 주세요.");if(!ids.length||ids[ids.length-1]!==i)ids.push(i);}
   let path=[ids[0]];
-  for(let k=1;k<ids.length;k++){const seg=astar(g,ids[k-1],ids[k]);if(!seg)throw new Error("경로를 찾지 못했습니다 (로컬 도로망)");path=path.concat(seg.slice(1));}
+  for(let k=1;k<ids.length;k++){const seg=astar(g,ids[k-1],ids[k]);if(!seg)throw new Error("길을 찾지 못했습니다 (로컬 도로망)");path=path.concat(seg.slice(1));}
   return pathOut(g,path,opt);}
 /* 경로 통계: 주황·노랑 구간 비율, 건널목 아닌 곳의 주황 도로 횡단 수 (그래프 노드 좌표로 역매핑) */
 function routeStats(coords){const g=GRAPH;if(!g||!coords.length||!inBox(g.box,coords[0]))return null;
@@ -1032,7 +1032,7 @@ async function zoneDetour(direct,target,onStep){
     onStep(Z.short+" 구역 도로망 불러오는 중",direct.dist);const saved=GRAPH;let zg=null;
     try{zg=await loadGraph(Z.center,3000);}catch(e){GRAPH=saved;continue;}
     if(zg)await usePopular(zg);
-    try{GRAPH=zg;markZone(zg,Z);onStep(Z.short+" 구역 경로 탐색",direct.dist);await sleep(0);
+    try{GRAPH=zg;markZone(zg,Z);onStep(Z.short+" 구역 길 찾는 중",direct.dist);await sleep(0);
       let w=zoneRoute(zg,Z,c[i0],c[i1],Lin+surplus,onStep);if(!w)w=genWalk(c[i0],c[i1],Lin+surplus,onStep,{force:true});if(!w)continue;
       const coords=c.slice(0,i0).concat(w.coords,c.slice(i1+1)),total=cumDist(coords).at(-1);
       return {coords,total,err:(total-target)/target,zone:{name:Z.name,km:w.total/1000,pref:w.walk.pref}};}
@@ -1106,7 +1106,7 @@ async function genA2B(A,B,target,side,onStep){
   try{const zd=await zoneDetour(direct,target,onStep);if(zd&&Math.abs(zd.err)<=0.06)return zd;}catch(e){/* 구역 처리 실패 시 기존 방식 */}
   if(direct.dist>=target*(1-TOL)){
     return {coords:direct.coords,total:direct.dist,err:(direct.dist-target)/target,
-      note:direct.dist>target*(1+TOL)?"최단 경로가 목표 거리보다 깁니다. 최단 경로를 표시합니다.":null};
+      note:direct.dist>target*(1+TOL)?"가장 짧은 길도 목표 거리보다 깁니다. 가장 짧은 길을 표시합니다.":null};
   }
   const k=Math.max(1.05,Math.min(1.8,direct.dist/D));
   const t=rnd(0.3,0.7), mid=[A[0]+(B[0]-A[0])*t,A[1]+(B[1]-A[1])*t], perp=(bearing(A,B)+(90+rnd(-20,20))*side+360)%360;
@@ -1150,7 +1150,7 @@ let mA=null,mB=null,line=null,kmLayer=L.layerGroup().addTo(map),arrLayer=L.layer
 /* ---------- 선호 경로 표시·편집 ---------- */
 const prefLayer=L.layerGroup().addTo(map),prefCanvas=L.canvas({padding:0.3});let prefDrawing=false,prefStroke=null,prefLine=null;
 function renderPref(){prefLayer.clearLayers();const st=prefState();$("#prefSeed").checked=!!st.seed;
-  const n=(st.strokes||[]).length;$("#prefInfo").textContent="내 획 "+n+"개"+(st.seed?" + 기본 선호 경로":"")+(GRAPH?" · 선호 도로 "+(()=>{const PI=prefApply(GRAPH);let L2=0;for(let u=0;u<GRAPH.n;u++)for(let e=GRAPH.off[u];e<GRAPH.off[u+1];e++)if(PI.pref[e]&&GRAPH.to[e]>u)L2+=GRAPH.len[e];return (L2/1000).toFixed(1)+"km";})():"");
+  const n=(st.strokes||[]).length;$("#prefInfo").textContent="내 획 "+n+"개"+(st.seed?" + 기본 좋아하는 길":"")+(GRAPH?" · 선호 도로 "+(()=>{const PI=prefApply(GRAPH);let L2=0;for(let u=0;u<GRAPH.n;u++)for(let e=GRAPH.off[u];e<GRAPH.off[u+1];e++)if(PI.pref[e]&&GRAPH.to[e]>u)L2+=GRAPH.len[e];return (L2/1000).toFixed(1)+"km";})():"");
   if(!$("#prefShow").checked)return;
   if(GRAPH){const PI=prefApply(GRAPH);for(let u=0;u<GRAPH.n;u++)for(let e=GRAPH.off[u];e<GRAPH.off[u+1];e++){const v=GRAPH.to[e];if(v>u&&PI.pref[e])L.polyline([[GRAPH.la[u],GRAPH.lo[u]],[GRAPH.la[v],GRAPH.lo[v]]],{color:"#dc2626",weight:7,opacity:.28,renderer:prefCanvas,interactive:false}).addTo(prefLayer);}}
   else if(st.seed)PREF_SEED.forEach(p=>L.circleMarker(p,{radius:2,stroke:false,fillColor:"#dc2626",fillOpacity:.45,renderer:prefCanvas,interactive:false}).addTo(prefLayer));
@@ -1253,7 +1253,7 @@ function draw(res){
   if(res.sketch) refLine=L.polyline(res.sketch.ideal,{color:"#1a56db",weight:4,opacity:.75,dashArray:"8 6",interactive:false}).addTo(map);
   else if(res.ref) refLine=L.polyline(res.ref.track,{color:"#5b6b67",weight:3,opacity:.55,dashArray:"6 6",interactive:false}).addTo(map);
   const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
-  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 경로 (출발지 반경 "+res.walk.R+"m · 꺾는 곳 "+res.walk.turns+"회 · 흰 도로 "+Math.round(res.walk.white*100)+"% · 선호 도로 "+Math.round(res.walk.pref*100)+"%"+(res.walk.zones.length?" · 선호 구간 "+res.walk.zones.length+"곳 포함":target_hint(res))+")":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
+  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 맵 (출발지 반경 "+res.walk.R+"m · 꺾는 곳 "+res.walk.turns+"회 · 흰 도로 "+Math.round(res.walk.white*100)+"% · 선호 도로 "+Math.round(res.walk.pref*100)+"%"+(res.walk.zones.length?" · 선호 구간 "+res.walk.zones.length+"곳 포함":target_hint(res))+")":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
   if(res.zone)ri.textContent+=" · "+res.zone.name+" 구간 "+res.zone.km.toFixed(1)+"km(코스 도로 "+Math.round(res.zone.pref*100)+"%)";
   if(res.spurCuts)ri.textContent+=" · 짧은 우회 "+res.spurCuts+"곳 정리";
@@ -1303,7 +1303,7 @@ async function generate(newSeed){
   const dirSel=$("#dir").value, brg=dirSel!==""?(+dirSel+rnd(-20,20)+360)%360:rnd(0,360);
   const side=Math.random()<0.5?-1:1;
   $("#go").disabled=$("#again").disabled=true;
-  const step=(i,d)=>status((typeof i==="number"?"경로 계산 "+i+"회차":i)+" · "+(d/1000).toFixed(2)+"km");
+  const step=(i,d)=>status((typeof i==="number"?"맵 그리는 중 "+i+"회차":i)+" · "+(d/1000).toFixed(2)+"km");
   try{
     let res=null;
     if(S.engine==="local"&&state.mode!=="sketch"){
@@ -1320,7 +1320,7 @@ async function generate(newSeed){
     if(res) ;
     else{
       if(S.engine==="local"&&$("#rstyle").value==="local"&&(state.mode==="loop"||state.mode==="a2b")){
-        step("동네 골목 경로 탐색",0);await sleep(0);
+        step("동네 골목 길 찾는 중",0);await sleep(0);
         const w=genWalk(state.A,state.mode==="a2b"?state.B:null,target,step);
         if(w&&Math.abs(w.err)<=0.08){res=w;}   /* 동네 골목 우선: 오차 8% 이내면 채택 */
       }
@@ -1337,7 +1337,7 @@ async function generate(newSeed){
         if(st&&st.orange<0.02&&st.yellow<0.05&&!st.xbad&&Math.abs(r.err)<=TOL)break;
         if(k<N-1)step("흰 도로 위주 후보 비교 "+(k+2)+"/"+N,r.total);
       }
-      if(!best)throw lastErr||new Error("경로를 만들지 못했습니다.");
+      if(!best)throw lastErr||new Error("달리기 맵을 그리지 못했습니다.");
       res=best.r;}
     /* 최종 안전검사: 어떤 생성 방식이든 통행 불가 구간 통과 금지 */
     if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
@@ -1347,12 +1347,12 @@ async function generate(newSeed){
     cur=res; draw(res);
     if(res.sketch){const f=res.sketch.fid;
       status(res.total>target*1.01?"도로 사정상 최대 거리를 넘었습니다. 최대 거리를 늘리거나 출발지를 옮겨 보세요."
-        :f>=0.8?"모양이 잘 맞는 스케치 경로입니다."
-        :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 경로 생성'으로 다른 위치를 시도해 보세요."
+        :f>=0.8?"모양이 잘 맞는 스케치 맵입니다."
+        :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 맵 그리기'으로 다른 위치를 시도해 보세요."
         :"이 근처 도로로는 알아보기 어렵습니다. 최대 거리를 늘리거나(글자가 커짐), 글자 수를 줄이거나, 바둑판 도로가 많은 곳으로 출발지를 옮겨 보세요.",res.total>target*1.01||f<0.68);}
-    else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리 오차 범위 내 경로입니다.":"오차가 큽니다. '다른 경로 생성'으로 재시도해 보세요."), !!res.note);
+    else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리에 맞는 달리기 맵입니다.":"오차가 큽니다. '다른 맵 그리기'으로 재시도해 보세요."), !!res.note);
   }catch(e){
-    status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"경로 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
+    status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"길 찾기 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
   }finally{$("#go").disabled=$("#again").disabled=false;}
 }
 $("#go").onclick=()=>generate(false);
