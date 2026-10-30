@@ -657,9 +657,9 @@ const POP_CLS=new Set(["residential","living_street","unclassified","tertiary","
 async function fetchPopular(box){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();if(!base||!key)return null;
   const k=box.map(v=>v.toFixed(3)).join(",");const hit=POP_CACHE.get(k);if(hit&&!hit.crawling)return hit;
   const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),15000);
-  try{const r=await fetch(base+"/popular?s="+box[0].toFixed(4)+"&w="+box[1].toFixed(4)+"&n="+box[2].toFixed(4)+"&e="+box[3].toFixed(4)+"&max=400",{headers:{"X-RR-Key":key},signal:ctl.signal});
+  try{const r=await fetch(base+"/popular?s="+box[0].toFixed(4)+"&w="+box[1].toFixed(4)+"&n="+box[2].toFixed(4)+"&e="+box[3].toFixed(4)+"&max=400&mode=heat",{headers:{"X-RR-Key":key},signal:ctl.signal});
     if(!r.ok)return hit||null;const j=await r.json();POP_CACHE.set(k,j);return j;}catch(e){return hit||null;}finally{clearTimeout(tm);}}
-function applyPopular(g,P){if(!P||!P.courses||!P.courses.length)return 0;if(g.popN===P.courses.length)return g.popN;
+function applyPopular(g,P){if(P&&P.cells)return applyHeat(g,P);if(!P||!P.courses||!P.courses.length)return 0;if(g.popN===P.courses.length)return g.popN;
   g.cm=g.cm||new Float32Array(g.to.length).fill(1);if(g.popBase)g.cm.set(g.popBase);else g.popBase=Float32Array.from(g.cm);
   const cnt=new Map(),C=25;
   for(const c of P.courses){const seen=new Set();const pts=c.pts;
@@ -671,6 +671,16 @@ function applyPopular(g,P){if(!P||!P.courses||!P.courses.length)return 0;if(g.po
     if(!POP_CLS.has(g.ecls[e]))m=0;/* 남의 코스가 지나도 단지 내부·산책로·주차 통로는 우대 안 함 */
     g.pop[e]=m;if(m&&g.wt[e]<BIG_W)g.cm[e]*=Math.max(0.65,1-0.06*Math.min(m,6));}
   g.wcls=null;g.popN=P.courses.length;g.popInfo={n:P.courses.length,found:P.found,crawling:P.crawling};return g.popN;}
+/* 중계가 준 '많이 겹치는 칸'(서로 다른 공개 코스 3개 이상, 약 27m 격자)으로 우대: 겹침이 많을수록 비용↓(최대 45%↓) */
+function applyHeat(g,P){const key=P.cells.length+":"+P.courses_used;if(g.popKey===key)return g.popN;
+  g.cm=g.cm||new Float32Array(g.to.length).fill(1);if(g.popBase)g.cm.set(g.popBase);else g.popBase=Float32Array.from(g.cm);
+  const H=new Map(),cs=P.cell;for(const [a,b,c] of P.cells)H.set(a+","+b,c);
+  g.pop=new Float32Array(g.to.length);let hit=0;
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(!POP_CLS.has(g.ecls[e]))continue;const v=g.to[e];
+    const la=(g.la[u]+g.la[v])/2,lo=(g.lo[u]+g.lo[v])/2,a=Math.floor(la/cs),b=Math.floor(lo/cs);let m=0;
+    for(let da=-1;da<=1;da++)for(let db=-1;db<=1;db++){const c=H.get((a+da)+","+(b+db));if(c>m)m=c;}
+    if(!m)continue;g.pop[e]=Math.min(m,10);hit++;if(g.wt[e]<BIG_W)g.cm[e]*=Math.max(0.55,1-0.05*Math.min(m,9));}
+  g.wcls=null;g.popKey=key;g.popN=P.courses_used;g.popInfo={n:P.courses_used,found:P.found,crawling:P.crawling,cells:P.cells.length,edges:hit};return g.popN;}
 async function usePopular(g){if(!g)return null;try{const P=await fetchPopular(g.box);if(P)applyPopular(g,P);return g.popInfo||null;}catch(e){return null;}}
 /* 공원 회피(사용자 지정 2026-10-30): 공원·정원 안 산책로는 갈림길이 많아 코스가 헷갈림 → 금지는 아니고 강하게 회피.
    leisure=park|garden 폴리곤(way + multipolygon 외곽) 안에 중점이 있는 도로 구간: 탐색 비용 배수 g.cm×PARK_W(도로 등급 wt는 그대로), 동네 골목 걷기 클래스 벌점 +PARK_WALK */
@@ -912,7 +922,7 @@ function deadEnds(g){if(g.dead)return g.dead;const n=g.n,dg=new Int32Array(n),de
 /* 동네 골목 루프용 도로 선호(지도상 '흰 도로' 중에서도): 주거지·일반 도로 0, 보행자 거리 0.6, 보행로·산책로·서비스 도로 1.6, 계단 3 */
 const WALK_CLS={residential:0,living_street:0,unclassified:0,tertiary:0,tertiary_link:0,pedestrian:0.6,footway:1.6,path:1.6,cycleway:1.6,track:1.6,service:3,steps:3};
 function walkCls(g){if(g.wcls)return g.wcls;const m=g.off[g.n],a=new Float32Array(m);/* buildGraph에 way 태그가 없으므로 가중치로 역추정 불가 → 별도 배열 사용 */
-  if(g.ecls){for(let e=0;e<m;e++)a[e]=Math.max(0,(WALK_CLS[g.ecls[e]]??0.5)+(g.park&&g.park[e]?PARK_WALK:0)-(g.pop?0.25*Math.min(g.pop[e],4):0));}return g.wcls=a;}
+  if(g.ecls){for(let e=0;e<m;e++)a[e]=Math.max(0,(WALK_CLS[g.ecls[e]]??0.5)+(g.park&&g.park[e]?PARK_WALK:0)-(g.pop?0.08*Math.min(g.pop[e],10):0));}return g.wcls=a;}
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 /* 되짚기 감지: 30m 격자에 진행 방향(45° 8칸)을 기록 → 같은 길(또는 왕복 차로가 따로 그려진 평행 차로)을 반대로 지나면 감지 */
 const DCELL=30;
@@ -1317,8 +1327,8 @@ function draw(res){
   if(res.zone)ri.textContent+=" · "+res.zone.name+" 구간 "+res.zone.km.toFixed(1)+"km(코스 도로 "+Math.round(res.zone.pref*100)+"%)";
   if(res.spurCuts)ri.textContent+=" · 짧은 우회 "+res.spurCuts+"곳 정리";
   if(res.unified)ri.textContent+=" · 겹치는 길 "+res.unified+"곳 선 하나로 통일";
-  if(GRAPH&&GRAPH.popInfo)ri.textContent+=" · Garmin 공개 러닝 코스 "+GRAPH.popInfo.n+"개 참조"+(GRAPH.popInfo.crawling?"(추가 "+GRAPH.popInfo.crawling+"개 수집 중)":"");
-  if(GRAPH&&GRAPH.parkN)ri.textContent+=" · 공원 안 길 회피";
+  if(GRAPH&&GRAPH.popInfo)ri.textContent+=" · Garmin 공개 러닝 코스 "+GRAPH.popInfo.n+"개 중 많이 겹치는 길(3개 이상) 우대"+(GRAPH.popInfo.crawling?"(추가 "+GRAPH.popInfo.crawling+"개 수집 중)":"");
+  if(GRAPH&&GRAPH.parkN)ri.textContent+=" · 공원 안 길 제외";
   if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
   {const st=routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
     res._xp=st.xp;}}

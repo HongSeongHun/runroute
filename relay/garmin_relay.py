@@ -187,6 +187,67 @@ def popular(s, w, n, e, mx=400):
     if todo: threading.Thread(target=crawl, args=(g, todo), daemon=True).start()
     return {"courses": [r for r in have if r.get("pts")], "found": len(runs), "cached": len(have), "crawling": len(todo)}
 
+# ---- 많이 겹치는 길(인기 구간) 격자 (사용자 지정 2026-10-30: 친구 여부와 상관없이 공개 코스가 많이 겹치는 곳) ----
+CELL = 0.00025          # 약 27m 격자
+HEAT_MIN = 3            # 서로 다른 코스 3개 이상이 지난 칸만 '인기 구간'
+_heat_memo = {}
+def heat(s, w, n, e):
+    k = (round(s, 3), round(w, 3), round(n, 3), round(e, 3), len(_idx))
+    if k in _heat_memo: return dict(_heat_memo[k])
+    r = _heat(s, w, n, e)
+    if len(_heat_memo) > 50: _heat_memo.clear()
+    _heat_memo[k] = r; return dict(r)
+def _heat(s, w, n, e):
+    """요청 범위와 겹치는 저장 코스 전부로 칸별 '서로 다른 코스 수'를 셈 → HEAT_MIN 이상인 칸만 반환"""
+    idx_load(); cnt = {}; used = 0
+    for cid, (a, b, c, d) in list(_idx.items()):
+        if c < s or a > n or d < w or b > e: continue
+        r = cached(cid)
+        if not r or not r.get("pts"): continue
+        used += 1; seen = set(); P = r["pts"]
+        for i in range(1, len(P)):
+            (la1, lo1), (la2, lo2) = P[i-1], P[i]
+            k = max(1, int(max(abs(la2-la1), abs(lo2-lo1)) / (CELL/2)))
+            for t in range(k + 1):
+                la = la1 + (la2-la1)*t/k; lo = lo1 + (lo2-lo1)*t/k
+                if s <= la <= n and w <= lo <= e: seen.add((int(math.floor(la/CELL)), int(math.floor(lo/CELL))))
+        for key in seen: cnt[key] = cnt.get(key, 0) + 1
+    cells = [[a, b, c] for (a, b), c in cnt.items() if c >= HEAT_MIN]
+    return {"cell": CELL, "cells": cells, "courses_used": used, "min": HEAT_MIN}
+
+# ---- 백그라운드 수집: 호치민 전역 공개 러닝 코스를 하루 한 번 천천히 ----
+WARM_AREAS = {"호치민": (10.65, 106.55, 10.90, 106.85)}
+WARM_DAILY_MAX = 1500   # 하루 최대 상세 수집 수(0.5초 간격 → 약 15~25분)
+def warm_loop():
+    import time
+    time.sleep(60)
+    while True:
+        try:
+            g = garmin(); mine = my_course_ids(g)
+            for name, bb in WARM_AREAS.items():
+                found = {}
+                def rec(s_, w_, n_, e_, d=0, calls=[0]):
+                    if calls[0] >= 800: return
+                    calls[0] += 1
+                    r = g.client.connectapi("/course-service/course/search", params={"south": s_, "west": w_, "north": n_, "east": e_})
+                    L = r.get("courseSummaryDTOs") or []
+                    for c in L: found[c["courseId"]] = c
+                    time.sleep(0.2)
+                    if (r.get("totalSearchHits") or 0) > len(L) and d < 9:
+                        ms, mw = (s_+n_)/2, (w_+e_)/2
+                        for b2 in ((s_, w_, ms, mw), (s_, mw, ms, e_), (ms, w_, n_, mw), (ms, mw, n_, e_)): rec(*b2, d=d+1, calls=calls)
+                rec(*bb)
+                todo = [c["courseId"] for c in sorted(found.values(), key=lambda c: -(c.get("updatedDate") or 0))
+                        if (c.get("activityType") or {}).get("typeKey") in RUN_TYPES and c["courseId"] not in mine
+                        and (c.get("distanceInMeters") or 0) <= 60000 and cached(c["courseId"]) is None][:WARM_DAILY_MAX]
+                sys.stderr.write(f"[warm] {name}: 검색 {len(found)}개, 새로 받을 러닝 코스 {len(todo)}개\n")
+                for cid in todo:
+                    try: fetch_detail(g, cid)
+                    except Exception: traceback.print_exc()
+                    time.sleep(0.5)
+        except Exception: traceback.print_exc()
+        time.sleep(24 * 3600)
+
 class H(BaseHTTPRequestHandler):
     def cors(self):
         o = self.headers.get("Origin")
@@ -217,7 +278,10 @@ class H(BaseHTTPRequestHandler):
             try:
                 s_, w_, n_, e_ = (float(q[k]) for k in ("s", "w", "n", "e"))
                 if not (0 < n_ - s_ <= 0.3 and 0 < e_ - w_ <= 0.3): return self.reply(400, {"error": "범위가 너무 큽니다(0.3° 이하)"})
-                self.reply(200, popular(s_, w_, n_, e_, min(int(q.get("max", 400)), 600)))
+                res = popular(s_, w_, n_, e_, min(int(q.get("max", 400)), 600))
+                if q.get("mode") == "heat":   # 많이 겹치는 칸만(가벼움)
+                    h = heat(s_, w_, n_, e_); h.update({k: res[k] for k in ("found", "cached", "crawling")}); res = h
+                self.reply(200, res)
             except KeyError: self.reply(400, {"error": "s,w,n,e 필요"})
             except Exception as ex:
                 traceback.print_exc(); self.reply(502, {"error": f"Garmin 코스 검색 실패: {ex}"})
@@ -239,4 +303,5 @@ if __name__ == "__main__":
     k = relay_key()
     if "--print-key" in sys.argv: print(k); sys.exit(0)
     print(f"RunRoute Garmin relay on http://{HOST}:{PORT}  (key file {KEY_FILE})", flush=True)
+    threading.Thread(target=warm_loop, daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), H).serve_forever()
