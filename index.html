@@ -581,7 +581,7 @@ async function loadGraph(center,need){
   if(GRAPH&&GRAPH.key===key) return GRAPH;
   const box=boxAround(cc,r+800);
   const bb=box.map(v=>v.toFixed(4)).join(",");
-  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;(way["leisure"~"^(park|garden)$"]('+bb+');rel["leisure"~"^(park|garden)$"]('+bb+'););out geom qt;';
+  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;(way["leisure"~"^(park|garden)$"]('+bb+');rel["leisure"~"^(park|garden)$"]('+bb+');way["landuse"="residential"]["residential"="apartments"]('+bb+');way["landuse"="residential"]["name"~"^(Chung c|Căn hộ|Khu căn hộ)",i]('+bb+'););out geom qt;';
   const ckey="https://runroute.local/osm?"+encodeURIComponent(q);
   let txt=null,cache=null,last="";
   try{cache=await caches.open("rr-osm-v2");const hit=await cache.match(ckey);
@@ -684,9 +684,9 @@ function applyHeat(g,P){const key=P.cells.length+":"+P.courses_used;if(g.popKey=
 async function usePopular(g){if(!g)return null;try{const P=await fetchPopular(g.box);if(P)applyPopular(g,P);return g.popInfo||null;}catch(e){return null;}}
 /* 공원 회피(사용자 지정 2026-10-30): 공원·정원 안 산책로는 갈림길이 많아 코스가 헷갈림 → 금지는 아니고 강하게 회피.
    leisure=park|garden 폴리곤(way + multipolygon 외곽) 안에 중점이 있는 도로 구간: 탐색 비용 배수 g.cm×PARK_W(도로 등급 wt는 그대로), 동네 골목 걷기 클래스 벌점 +PARK_WALK */
-const PARK_W=4,PARK_WALK=4,SERVICE_W=3;
-function parkRings(j){const rings=[];const ring=pts=>{if(pts.length>=4)rings.push(pts);};
-  for(const e of j.elements||[]){const t=e.tags||{};if(!/^(park|garden)$/.test(t.leisure||""))continue;
+const PARK_W=4,PARK_WALK=4,SERVICE_W=1.5;
+function parkRings(j,pred=t=>/^(park|garden)$/.test(t.leisure||"")){const rings=[];const ring=pts=>{if(pts.length>=4)rings.push(pts);};
+  for(const e of j.elements||[]){const t=e.tags||{};if(!pred(t))continue;
     if(e.type==="way"&&e.geometry){const p=e.geometry.filter(Boolean);if(p.length&&p[0].lat===p.at(-1).lat&&p[0].lon===p.at(-1).lon)ring(p);}
     else if(e.type==="relation"&&e.members){let segs=e.members.filter(m=>m.type==="way"&&m.role!=="inner"&&m.geometry).map(m=>m.geometry.filter(Boolean));
       while(segs.length){let cur=segs.shift();let grown=true;
@@ -699,10 +699,30 @@ function parkRings(j){const rings=[];const ring=pts=>{if(pts.length>=4)rings.pus
 /* 공원 안 길은 경로에서 제외(사용자 지정 2026-10-30, '피해줘 → 빼줘'): 공원 둘레 인도는 그대로 사용.
    예외: 사용자가 직접 그린 좋아하는 길(빨간 선)과 겹치는 공원 길만 prefApply 에서 다시 허용 */
 function blockParks(g){if(!g.park)return;g.blk=g.blk||new Uint8Array(g.to.length);g.parkBlk=new Uint8Array(g.to.length);
-  for(let e=0;e<g.to.length;e++)if(g.park[e]&&!g.blk[e]){g.blk[e]=1;g.parkBlk[e]=1;}}
+  for(let e=0;e<g.to.length;e++)if((g.park[e]||(g.comp&&g.comp[e]))&&!g.blk[e]){g.blk[e]=1;g.parkBlk[e]=1;}}
+const COMPOUND=t=>t.landuse==="residential"&&(t.residential==="apartments"||/^(chung c|căn hộ|khu căn hộ)/i.test(t.name||""));
+const INNER_CLS=new Set(["service","residential","living_street","footway","path","pedestrian","track","cycleway","steps","unclassified"]);
+function polyTester(g,rings){const polys=rings.map(r=>{const xs=r.map(p=>(p.lon-g.lon0)*g.kx),ys=r.map(p=>(p.lat-g.lat0)*g.ky);
+    return {xs,ys,x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};});
+  const inside=(P,x,y)=>{if(x<P.x0||x>P.x1||y<P.y0||y>P.y1)return false;let c=false;const {xs,ys}=P;
+    for(let i=0,k=xs.length-1;i<xs.length;k=i++)if((ys[i]>y)!==(ys[k]>y)&&x<(xs[k]-xs[i])*(y-ys[i])/(ys[k]-ys[i])+xs[i])c=!c;return c;};
+  return (x,y)=>{for(const P of polys)if(inside(P,x,y))return true;return false;};}
+/* 아파트 단지(chung cư) 내부 길 제외 (사용자 지정 2026-10-30): landuse=residential + residential=apartments(또는 이름이 Chung cư/Căn hộ)
+   폴리곤 안의 '이름 없는' 내부 통로·보행로는 맵에서 뺌. 이름 있는 공용 도로는 유지 */
+function compoundEdges(g,j){const rings=parkRings(j,COMPOUND);g.comp=new Uint8Array(g.to.length);g.compN=rings.length;if(!rings.length)return;const inP=polyTester(g,rings);
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(g.ename[e]||!INNER_CLS.has(g.ecls[e]))continue;const v=g.to[e];if(inP((g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2))g.comp[e]=1;}}
+/* 왕복 분리 차로(같은 이름의 큰길 두 줄) 사이를 건너는 짧은 구간 = 큰길 횡단 → 안전을 위해 큰 비용(300m 상당)
+   (사용자 지정 2026-10-30: 쓸데없이 길을 건넜다 다시 건너는 맵 금지) */
+const XING_COST=300;
+function medianCrossings(g){const big=new Array(g.n);for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++)if(g.wt[e]>=BIG_W&&g.ename[e]){(big[u]=big[u]||new Set()).add(g.ename[e]);}
+  g.xc=new Float32Array(g.to.length);let n=0;
+  for(let u=0;u<g.n;u++){if(!big[u])continue;for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(!big[v]||g.len[e]>60)continue;
+    for(const X of big[u])if(big[v].has(X)&&g.ename[e]!==X){g.xc[e]=XING_COST;n++;break;}}}
+  g.xcN=n;}
 function applyParks(g,j){g.cm=g.cm||new Float32Array(g.to.length).fill(1);
-  /* 단지 내부 service 도로(이름 없는 것)는 3배 비용 */
+  /* 이름 없는 service 도로는 1.5배 비용(큰길 옆 측도는 남겨 둠) */
   for(let e=0;e<g.to.length;e++)if(g.ecls[e]==='service'&&!g.ename[e])g.cm[e]*=SERVICE_W;
+  compoundEdges(g,j);medianCrossings(g);
   const rings=parkRings(j);g.park=new Uint8Array(g.to.length);g.parkN=rings.length;if(!rings.length)return;
   const polys=rings.map(r=>{const xs=r.map(p=>(p.lon-g.lon0)*g.kx),ys=r.map(p=>(p.lat-g.lat0)*g.ky);
     return {xs,ys,x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};});
@@ -732,7 +752,7 @@ function astar(g,s,t,pen){
   seen[s]=st;gs[s]=0;par[s]=-1;push(s,Math.hypot(g.x[s]-tx,g.y[s]-ty));let it=0;
   while(H.length){const u=pop();if(closed[u]===st)continue;closed[u]=st;if(u===t)break;if(++it>400000)return null;
     for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(closed[v]===st||(g.blk&&g.blk[e]))continue;
-      const c=gs[u]+g.len[e]*(g.wt[e]*(g.cm?g.cm[e]:1)+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0);
+      const c=gs[u]+g.len[e]*(g.wt[e]*(g.cm?g.cm[e]:1)+(pen?pen(u,v):0))+(g.wt[e]<ORANGE_W?g.np[v]:0)+(g.xc?g.xc[e]:0);
       if(seen[v]!==st||c<gs[v]){seen[v]=st;gs[v]=c;par[v]=u;push(v,c+Math.hypot(g.x[v]-tx,g.y[v]-ty));}}}
   if(closed[t]!==st) return null;
   const path=[];for(let v=t;v>=0;v=par[v]){path.push(v);if(v===s)break;}return path.reverse();}
@@ -934,7 +954,7 @@ function oppFrac(g,dm,u,v){const ob=(dirBin(g,u,v)+4)%8,m=(1<<ob)|(1<<((ob+1)%8)
   return h/cs.length;}
 function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng,P){
   const vis=new Map(),nv=new Map(),dvis=new Set(),dm=new Map(),path=[sN],dead=deadEnds(g),wc=walkCls(g);let cur=sN,prev=-1,trav=0,guard=0;nv.set(sN,1);
-  const key=(a,b)=>a<b?a*1e6+b:b*1e6+a,goals=P?P.goals:[],cov=new Map();let gi=0,reached=false,offPref=0;
+  const key=(a,b)=>a<b?a*1e6+b:b*1e6+a,goals=P?P.goals:[],cov=new Map();let gi=0,reached=false,offPref=0,lastE=-1;
   /* 다음 조각으로: 60% 달렸거나, 도착 후 선호 도로를 150m 이상 벗어났을 때 */
   const goal=()=>{while(gi<goals.length&&((cov.get(goals[gi].id)||0)>=goals[gi].L*PREF_COV||(reached&&offPref>150))){gi++;reached=false;offPref=0;}return goals[gi]||null;};
   while(guard++<20000){if(cur===eN&&trav>=target*0.99)break;if(trav+dE[cur]*1.12>=target*0.99&&cur!==sN)break;
@@ -942,24 +962,27 @@ function walkOnce(g,sN,eN,target,dE,cx,cy,R0,rng,P){
     let best=-1,be=-1,bs=-Infinity,ref=-1;
     if(path.length>1){let d=0;for(let q=path.length-1;q>0;q--){d+=Math.hypot(g.x[path[q]]-g.x[path[q-1]],g.y[path[q]]-g.y[path[q-1]]);ref=path[q-1];if(d>=30)break;}}
     for(let e=g.off[cur];e<g.off[cur+1];e++){const v=g.to[e];if(!stepOK(g,e,v)||!isFinite(dE[v]))continue;
+      if(g.wt[e]>=ORANGE_W&&lastE>=0&&g.wt[lastE]>=ORANGE_W)continue;   /* 큰길(주황)은 건너기만: 큰길 위를 이어 달리기 금지 */
       const L=g.len[e];if(trav+L+dE[v]>target*1.02)continue;
       const c=vis.get(key(cur,v))||0,pe=P&&P.pref[e];let sc=-c*0.9-(g.wt[e]-1)*2-(pe?0:wc[e]*2);   /* 반복은 약하게, 보행로·서비스 도로 회피(선호 도로는 예외) */
       if(pe&&!c)sc+=G?5:3;                               /* 선호 도로(처음) 가산 */
       if(G&&isFinite(G.dZ[v]))sc+=(G.dZ[cur]-G.dZ[v])/(toZone?10:40);   /* 선호 구역 쪽으로 끌림 */
+      if(g.xc&&g.xc[e])sc-=20;                          /* 분리 차로 큰길 횡단은 강하게 회피(안전) */
       if(v===prev)sc-=4;
       if(dvis.has(v+">"+cur))sc-=8;else{const of=oppFrac(g,dm,cur,v);if(of>0.3)sc-=5*of;}   /* 같은 길·평행 차로 반대 방향 되짚기 금지 수준 */
       if(dead[v]&&!dead[cur]&&v!==eN)sc-=8;            /* 막다른 가지(선호 도로 포함) 진입 금지 수준 */         /* 막다른 가지 진입 금지 수준 */
       sc-=(nv.get(v)||0)*0.3;
-      if(!toZone){let r=Math.hypot(g.x[v]-cx,g.y[v]-cy)-R0;if(P)for(const z of P.goals)r=Math.min(r,Math.hypot(g.x[v]-z.cx,g.y[v]-z.cy)-z.R-150);if(r>0)sc-=r/120;}
+      if(!toZone){let r=Math.hypot(g.x[v]-cx,g.y[v]-cy)-R0;if(P)for(const z of P.goals)r=Math.min(r,Math.hypot(g.x[v]-z.cx,g.y[v]-z.cy)-z.R-150);if(r>0)sc-=r/250;}
       if(ref>=0){const a1=Math.atan2(g.x[cur]-g.x[ref],g.y[cur]-g.y[ref]),a2=Math.atan2(g.x[v]-g.x[cur],g.y[v]-g.y[cur]);let da=Math.abs(a2-a1);if(da>Math.PI)da=2*Math.PI-da;
-        sc-=da<0.35?0:(3.5+2.5*da/Math.PI)*(pe?0.4:1);}   /* 직진 우선(선호 도로의 굽은 길은 완화) */
+        sc-=da<0.35?0:(5+2.5*da/Math.PI)*(pe?0.4:1);
+        if(da<0.35&&g.ename[e]&&prev>=0){for(let x=g.off[prev];x<g.off[prev+1];x++)if(g.to[x]===cur){if(g.ename[x]===g.ename[e])sc+=2;break;}}}   /* 같은 이름 길로 곧게 이어가기 가산 */   /* 직진 우선(선호 도로의 굽은 길은 완화) */
       sc+=rng()*0.9;
       if(sc>bs){bs=sc;best=v;be=e;}}
     if(best<0)break;
     const k0=key(cur,best),first=!vis.has(k0);
     if(first&&P&&P.pref[be]){const z=P.edgeZone[be];if(z>=0)cov.set(z,(cov.get(z)||0)+g.len[be]);}
     if(G){if(G.dZ[best]===0)reached=true;if(reached)offPref=P.pref[be]?0:offPref+g.len[be];}
-    vis.set(k0,(vis.get(k0)||0)+1);dvis.add(cur+">"+best);markDir(g,dm,cur,best);trav+=g.len[be];prev=cur;cur=best;path.push(cur);nv.set(cur,(nv.get(cur)||0)+1);}
+    vis.set(k0,(vis.get(k0)||0)+1);dvis.add(cur+">"+best);markDir(g,dm,cur,best);trav+=g.len[be];lastE=be;prev=cur;cur=best;path.push(cur);nv.set(cur,(nv.get(cur)||0)+1);}
   /* 남은 구간: 끝점까지, 이미 지난 길을 반대로 되짚지 않는 경로(A*, 되짚기 비용 가산) */
   if(cur!==eN){const hp=astar(g,cur,eN,(u,v)=>dvis.has(v+">"+u)?3:(oppFrac(g,dm,u,v)>0.3?2:0));if(!hp)return null;
     for(let q=1;q<hp.length;q++){const a=hp[q-1],b=hp[q];let be=-1;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){be=e;break;}if(be<0)return null;
@@ -1148,7 +1171,7 @@ function finalizeRoute(res,target,mode){if(res.sketch)return res;
   {const u=unifyOverlap(c);c=u.coords;res.unified=u.n;}
   if(mode!=="loop"){const t=trimTail(c);c=t.coords;res.tailTrim=t.cut;}
   let tot=cumDist(c).at(-1);const def=target-tot;
-  if(def>Math.max(60,target*0.01)){const ex=extendFinish(c,def);if(ex){res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=ex.len;}}
+  let d2=def;for(let k=0;k<2&&d2>Math.max(60,target*0.01);k++){const ex=extendFinish(c,d2);if(!ex)break;if(!res.extTurn)res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;d2=target-cumDist(c).at(-1);}
   res.coords=c;res.total=cumDist(c).at(-1);res.err=(res.total-target)/target;return res;}
 /* ===== END local-graph ===== */
 
@@ -1418,9 +1441,9 @@ async function generate(newSeed){
     if(res.sketch){const f=res.sketch.fid;
       status(res.total>target*1.01?"도로 사정상 최대 거리를 넘었습니다. 최대 거리를 늘리거나 출발지를 옮겨 보세요."
         :f>=0.8?"모양이 잘 맞는 스케치 맵입니다."
-        :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 맵 그리기'으로 다른 위치를 시도해 보세요."
+        :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 맵 그리기'로 다른 위치를 시도해 보세요."
         :"이 근처 도로로는 알아보기 어렵습니다. 최대 거리를 늘리거나(글자가 커짐), 글자 수를 줄이거나, 바둑판 도로가 많은 곳으로 출발지를 옮겨 보세요.",res.total>target*1.01||f<0.68);}
-    else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리에 맞는 달리기 맵입니다.":"오차가 큽니다. '다른 맵 그리기'으로 재시도해 보세요."), !!res.note);
+    else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리에 맞는 달리기 맵입니다.":"오차가 큽니다. '다른 맵 그리기'로 재시도해 보세요."), !!res.note);
   }catch(e){
     status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"길 찾기 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
   }finally{$("#go").disabled=$("#again").disabled=false;}
