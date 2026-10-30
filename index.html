@@ -131,12 +131,17 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       <label class="lbl" for="shape">스케치 모양</label>
       <div class="row">
         <select id="shape" style="flex:0 0 40%">
-          <option value="text">글자·숫자</option><option value="dog">강아지</option><option value="cat">고양이</option>
+          <option value="digital">디지털 숫자</option><option value="text">글자·숫자</option><option value="dog">강아지</option><option value="cat">고양이</option>
           <option value="heart">하트</option><option value="star">별</option>
         </select>
         <input id="sketchText" placeholder="예: 815, LOVE" maxlength="8" autocomplete="off" autocapitalize="characters">
       </div>
-      <span class="note">출발지 주변(최대 2km)에서 그리기 좋은 위치를 찾아, 접근 구간 포함 전체 거리를 '최대 거리' 이내로 맞춥니다. 숫자 0–9, 영문 A–Z 지원.</span>
+      <div class="row" style="margin-top:8px">
+        <label class="lbl" for="skR" style="flex:0 0 40%;margin:0;align-self:center">찾을 범위</label>
+        <select id="skR"><option value="3000">반경 3km</option><option value="6000" selected>반경 6km</option><option value="10000">반경 10km (처음엔 느림)</option></select>
+      </div>
+      <span class="note">모양 우선: 출발지를 정하지 않아도 됩니다. 출발지(지정했으면) 또는 지도 중심에서 '찾을 범위' 안을 모두 훑어 이 모양이 가장 잘 나오는 장소·크기·각도를 찾고, 후보 3곳을 보여줍니다. 거리는 모양 길이만 계산합니다(출발점까지 이동 거리 제외). 디지털 숫자는 전자시계처럼 가로·세로 획만 써서 바둑판 도로에서 가장 잘 나옵니다.</span>
+      <div id="skCands" class="row" style="flex-wrap:wrap;gap:6px;margin-top:8px" hidden></div>
     </div>
 
     <div class="grid2">
@@ -550,7 +555,11 @@ function normPoly(p){const xs=p.map(q=>q[0]),ys=p.map(q=>q[1]),x0=Math.min(...xs
 function textPoly(t){const W=0.62,G=0.38,out=[];let x=0;
   for(const ch of String(t).toUpperCase()){if(ch===" "){x+=W;continue;}const g=GLYPH[ch]?baseline(GLYPH[ch]):null;if(!g)continue;g.forEach(q=>out.push([x+q[0]*W,q[1]]));x+=W+G;}
   return out;}
+const GLYPH7=Object.assign({},GLYPH,{"1":[[1,0],[1,1]],"7":[[0,1],[1,1],[1,0]]});   /* 전자시계(7획) 숫자: 가로·세로 획만 */
+function textPoly7(t){const W=0.6,G=0.45,out=[];let x=0;
+  for(const ch of String(t)){if(ch===" "){x+=W;continue;}const g=GLYPH7[ch]?baseline(GLYPH7[ch]):null;if(!g)continue;g.forEach(q=>out.push([x+q[0]*W,q[1]]));x+=W+G;}return out;}
 function sketchShape(){const k=$("#shape").value;
+  if(k==="digital"){const t=$("#sketchText").value.replace(/[^0-9]/g,"").slice(0,6);const p=textPoly7(t);return p.length>1?{poly:p,label:'"'+t+'" (디지털)',tag:"d"+t,digital:true}:null;}
   if(k==="text"){const t=$("#sketchText").value.trim().toUpperCase().replace(/[^0-9A-Z ]/g,"");const p=textPoly(t);return p.length>1?{poly:p,label:'"'+t+'"',tag:t.replace(/ /g,"")}:null;}
   return {poly:normPoly(PICS[k].p),label:PICS[k].name,tag:k};}
 const pLen=p=>{let s=0;for(let i=1;i<p.length;i++)s+=Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]);return s;};
@@ -822,13 +831,14 @@ function sampDir(p,step){const o=[];for(let i=1;i<p.length;i++){const a=p[i-1],b
   for(let k=0;k<n;k++){const f=(k+0.5)/n;o.push({q:[a[0]+(b[0]-a[0])*f,a[1]+(b[1]-a[1])*f],ang});}}return o;}
 function angMask(ang){const d=((ang*180/Math.PI)+360)%180,b=Math.round(d/22.5)%8;return (1<<b)|(1<<((b+1)%8))|(1<<((b+7)%8));}
 function xyLen(p){let s=0;for(let i=1;i<p.length;i++)s+=Math.hypot(p[i][0]-p[i-1][0],p[i][1]-p[i-1][1]);return s;}
+var SK_SNAP=0.12,SK_PEN=7;
 function traceSketch(g,gp,c,s,th){
   /* 획(꼭짓점→꼭짓점) 단위 추적: 꼭짓점만 도로 노드에 스냅, 획 사이는 "획 직선과의 거리"를 비용으로 A* */
-  const W=place(gp.p,c,s,th),snapR=Math.max(40,s*0.12),V=[];
+  const W=place(gp.p,c,s,th),snapR=Math.max(40,s*SK_SNAP),V=[];
   for(const q of W){let i=nearestNode(g,q,snapR,true);if(i<0)i=nearestNode(g,q,snapR*2,true);if(i<0)return null;V.push(i);}
   let path=[V[0]];
   for(let k=1;k<W.length;k++){if(V[k]===path[path.length-1])continue;const a=W[k-1],b=W[k];
-    const pen=(u,v)=>{const du=segD([g.x[u],g.y[u]],a,b),dv=segD([g.x[v],g.y[v]],a,b),dm=segD([(g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2],a,b),d=(du+dv+2*dm)/4;return d<=8?0:Math.min(d,300)/7;};
+    const pen=(u,v)=>{const du=segD([g.x[u],g.y[u]],a,b),dv=segD([g.x[v],g.y[v]],a,b),dm=segD([(g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2],a,b),d=(du+dv+2*dm)/4;return d<=8?0:Math.min(d,300)/SK_PEN;};
     const seg=astar(g,path[path.length-1],V[k],pen);if(!seg)return null;path=path.concat(seg.slice(1));}
   let ll=path.map(i=>[g.la[i],g.lo[i]]);
   ll=cutDetours(ll,Math.min(120,s*0.25)).coords;const xy=ll.map(q=>toXY(g,q));
@@ -879,6 +889,45 @@ async function genSketch(A,maxD,shape,onStep){
   return {coords,total,err:(total-maxD)/maxD,sketch:{label:shape.label,tag:shape.tag,fid:b.t.fid,th:b.t.cand.th,
     ideal:sampXY(b.t.W,15).map(q=>toLL(g,q)),main:b.t.ll,legs:[b.L.a,b.L.b],maxD,approach:b.L.len,size:Math.round(b.t.cand.s*gp.h)}};
 }
+/* ---------- 스케치런 v3 (사용자 지정 2026-10-30): 모양 우선 · 장소 찾기 ----------
+   출발지를 고정하지 않고, 기준점(출발지 또는 지도 중심)에서 '찾을 범위' 안을 지역(반경 3km 도로망) 단위로 모두 훑어
+   이 모양이 가장 잘 나오는 장소·크기·각도를 찾음. 거리 = 모양 길이만. 서로 800m 이상 떨어진 후보 3곳 제시.
+   크기는 '모양 거리'에 맞춤(±20% 안에서 모양 일치도 우선). 바둑판 도로 방향(우세 각도)을 회전 후보에 추가. */
+function domAngles(r){const h=new Float64Array(8);for(let k=0;k<r.dir.length;k++){const d=r.dir[k];if(!d||r.a[k]<2)continue;for(let b=0;b<8;b++)if(d&(1<<b))h[b]++;}
+  const idx=[...h.keys()].sort((a,b)=>h[b]-h[a]);return idx.slice(0,2).map(b=>b*22.5);}
+function skTiles(C,R){if(R<=3000)return [C];const off=R<=6000?[[0,0],[1,0],[-1,0],[0,1],[0,-1]]:[[0,0],[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]],st=R<=6000?4000:6000;
+  return off.map(([a,b])=>[C[0]+a*st/111195,C[1]+b*st/(111195*Math.cos(rad(C[0])))]);}
+async function genSketchFind(C,D,shape,R,onStep){
+  const gp=glyphPrep(shape.poly),isText=shape.label.startsWith('"'),RF=1.2,minH=isText?250:300;
+  const sT=D/(gp.Lu*RF);if(sT*gp.h<minH)throw new Error("모양 거리 "+(D/1000)+"km로는 알아볼 수 있는 크기가 안 됩니다. "+Math.ceil(minH/gp.h*gp.Lu*RF/1000)+"km 이상으로 늘리거나 글자 수를 줄여 주세요.");
+  const scales=[sT*0.85,sT,sT*1.15,sT*1.3,sT*1.5],samp=sampDir(gp.p,gp.Lu/140),thr=0.55,maxMiss=samp.length*(1-thr),found=[],tiles=skTiles(C,R);
+  for(let ti=0;ti<tiles.length;ti++){onStep("지역 "+(ti+1)+"/"+tiles.length+" 도로망 불러오는 중",0);let g;try{g=await loadGraph(tiles[ti],3000);}catch(e){continue;}
+    const rast=roadRaster(g),c0=toXY(g,C),dom=domAngles(rast);
+    const nrm=a=>{a=((a%180)+180)%180;return a>90?a-180:a;};   /* 글자는 똑바로(-90~90) */
+    let rots=isText?[-15,-10,-5,0,5,10,15]:[0,30,60,90,120,150,180,210,240,270,300,330];
+    for(const d of dom){const base=isText?[nrm(d),nrm(d+90),nrm(-d),nrm(-d+90)]:[d,d+90,d+180,d+270,-d,-d+90,-d+180,-d+270];for(const b of base)for(const k of [-4,0,4])rots.push(b+k);}
+    if(isText)rots=rots.filter(t=>Math.abs(t)<=35);rots=[...new Set(rots.map(t=>Math.round(t)))];
+    onStep("지역 "+(ti+1)+"/"+tiles.length+" 모양 놓아 보기",0);await sleep(0);
+    const cands=[],bx=toXY(g,[g.box[0],g.box[1]]),by=toXY(g,[g.box[2],g.box[3]]);
+    for(const s of scales){const half=Math.hypot(gp.w,gp.h)*s/2;
+      for(const th of rots){const P=place(samp.map(o=>o.q),[0,0],s,th),M=samp.map(o=>angMask(o.ang-th*Math.PI/180));
+        for(let X=bx[0]+half+200;X<=by[0]-half-200;X+=70)for(let Y=bx[1]+half+200;Y<=by[1]-half-200;Y+=70){if(Math.hypot(X-c0[0],Y-c0[1])>R)continue;
+          let hit=0,miss=0;for(let z=0;z<P.length;z++){const v=rastDir(rast,X+P[z][0],Y+P[z][1],M[z]);if(v===3)hit++;else if(v===2)hit+=0.55;else if(v===1)hit+=0.1;else if(++miss>maxMiss)break;}
+          if(miss>maxMiss)continue;cands.push({c:[X,Y],s,th,cov:hit/P.length});}}}
+    cands.sort((p,q)=>q.cov-p.cov);const top=[];for(const c of cands){if(top.every(t=>Math.hypot(t.c[0]-c.c[0],t.c[1]-c.c[1])>250)){top.push(c);if(top.length>=24)break;}}
+    for(let k=0;k<top.length;k++){if(k%3===0){onStep("지역 "+(ti+1)+"/"+tiles.length+" 모양 맞춰 보기 "+(k+1)+"/"+top.length,0);await sleep(0);}
+      const c=top[k];let t=traceSketch(g,gp,c.c,c.s,c.th);if(!t)continue;
+      if(Math.abs(t.len-D)/D>0.35){const s2=c.s*D/t.len;const t2=traceSketch(g,gp,c.c,s2,c.th);if(t2&&(Math.abs(t2.len-D)<Math.abs(t.len-D))&&t2.fid>=t.fid-0.05){t=t2;c.s=s2;}}
+      if(blockHit(t.ll))continue;
+      found.push({fid:t.fid,len:t.len,ll:t.ll,ideal:sampXY(t.W,15).map(q=>toLL(g,q)),th:c.th,size:Math.round(c.s*gp.h),cll:toLL(g,c.c),sc:t.fid-0.12*Math.max(0,Math.abs(t.len-D)/D-0.1)});}}   /* 모양 우선: 거리 차이는 10% 넘는 부분만 약하게 감점 */
+  if(!found.length)throw new Error("찾을 범위 안에서 이 모양을 그릴 도로를 찾지 못했습니다. 범위를 넓히거나 다른 모양으로 시도해 주세요.");
+  found.sort((p,q)=>q.sc-p.sc);const pick=[];for(const f of found){if(pick.every(p=>hav(p.cll,f.cll)>800)){pick.push(f);if(pick.length>=3)break;}}
+  const mk=(f,i)=>({coords:f.ll,total:cumDist(f.ll).at(-1),err:(cumDist(f.ll).at(-1)-D)/D,sketch:{label:shape.label,tag:shape.tag,fid:f.fid,th:f.th,ideal:f.ideal,main:f.ll,legs:[],maxD:D,approach:0,size:f.size,dist:hav(C,f.ll[0]),idx:i}});
+  const all=pick.map(mk);all.forEach(r=>r.sketch.cands=all);return all[0];}
+function showSkCands(res){const box=$("#skCands");if(!box)return;box.innerHTML="";const all=res&&res.sketch&&res.sketch.cands;if(!all||all.length<2){box.hidden=true;return;}box.hidden=false;
+  all.forEach((r,i)=>{const b=document.createElement("button");b.type="button";b.className="btn";b.style.flex="1 1 30%";
+    b.textContent="후보 "+(i+1)+" · 일치 "+Math.round(r.sketch.fid*100)+"% · "+(r.total/1000).toFixed(1)+"km";
+    b.onclick=()=>{r.coords=thin(r.coords);cur=r;draw(r);status("후보 "+(i+1)+": 모양 일치도 "+Math.round(r.sketch.fid*100)+"%");};box.appendChild(b);});}
 /* ---------- 동네 골목 루프 (Neighborhood walk) ----------
    출발지 근처 흰 도로를 촘촘히 훑는 경로. 끝점까지 남은 최단거리(distField)를 예산으로 두고,
    안 지나간 흰 골목 우선 · 출발지에서 멀어지면 감점 · U턴/막다른 길 감점 · 주황 도로는 건널목에서만 가로지르기(따라 걷기 금지).
@@ -1322,7 +1371,7 @@ document.querySelectorAll("#mode button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("#mode button").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
   const sk=state.mode==="sketch"; $("#sketchBox").hidden=!sk; $("#dirBox").hidden=sk; $("#libRow").hidden=sk;
   $("#styleBox").hidden=!(state.mode==="loop"||state.mode==="a2b");
-  $("#distLbl").textContent=sk?"최대 거리 (km)":"목표 거리 (km)";
+  $("#distLbl").textContent=sk?"모양 거리 (km)":"목표 거리 (km)";
   $("#ptB").hidden=state.mode!=="a2b"; if(mB) (state.mode==="a2b"?mB.addTo(map):mB.remove());
   const pb=document.querySelector('.picker [data-p="B"]'); if(pb) pb.hidden=state.mode!=="a2b";
   setPick(state.mode==="a2b"&&state.A?"B":"A");
@@ -1371,7 +1420,7 @@ function draw(res){
   if(res.sketch) refLine=L.polyline(res.sketch.ideal,{color:"#1a56db",weight:4,opacity:.75,dashArray:"8 6",interactive:false}).addTo(map);
   else if(res.ref) refLine=L.polyline(res.ref.track,{color:"#5b6b67",weight:3,opacity:.55,dashArray:"6 6",interactive:false}).addTo(map);
   const ri=$("#refInfo"),fam=res.fam!=null?" · 내 코스와 겹치는 길 "+Math.round(res.fam*100)+"%":"";
-  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 회색 점선=오가는 길) · 모양 일치도 "+Math.round(k.fid*100)+"% · 글자 높이 "+k.size+"m · 회전 "+k.th+"° · 오가는 길 "+(k.approach/1000).toFixed(1)+"km 포함 · 최대 "+(k.maxD/1000)+"km 이내";} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 맵 (출발지 반경 "+res.walk.R+"m · 꺾는 곳 "+res.walk.turns+"회 · 흰 도로 "+Math.round(res.walk.white*100)+"% · 선호 도로 "+Math.round(res.walk.pref*100)+"%"+(res.walk.zones.length?" · 선호 구간 "+res.walk.zones.length+"곳 포함":target_hint(res))+")":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
+  ri.hidden=false; if(res.sketch){const k=res.sketch;ri.textContent="스케치: "+k.label+" (파란 점선=목표 모양, 보라=달릴 길, S=출발·F=도착) · 모양 일치도 "+Math.round(k.fid*100)+"% · 모양 높이 "+k.size+"m · 회전 "+k.th+"°"+(k.dist!=null?" · 기준점에서 "+(k.dist/1000).toFixed(1)+"km 떨어진 곳":"")+(k.cands&&k.cands.length>1?" · 후보 "+(k.idx+1)+"/"+k.cands.length:"");} else ri.textContent=(res.ref?"참조 코스: "+res.ref.name+" ("+(res.ref.dist/1000).toFixed(1)+"km, 점선)":(res.walk?"동네 골목 맵 (출발지 반경 "+res.walk.R+"m · 꺾는 곳 "+res.walk.turns+"회 · 흰 도로 "+Math.round(res.walk.white*100)+"% · 선호 도로 "+Math.round(res.walk.pref*100)+"%"+(res.walk.zones.length?" · 선호 구간 "+res.walk.zones.length+"곳 포함":target_hint(res))+")":LIB.length&&$("#useLib").checked?"근처(3km 이내)에 내 코스가 없어 일반 랜덤 생성":"일반 랜덤 생성"))+fam
     +(res.ut!=null?" · 중간 U턴 "+res.ut+"회":"")+(res.turn?" · 반환점: "+(res.roadEnd?"길 끝 교차로":"교차로"):"");
   if(res.zone)ri.textContent+=" · "+res.zone.name+" 구간 "+res.zone.km.toFixed(1)+"km(코스 도로 "+Math.round(res.zone.pref*100)+"%)";
   if(res.spurCuts)ri.textContent+=" · 짧은 우회 "+res.spurCuts+"곳 정리";
@@ -1384,6 +1433,7 @@ function draw(res){
   const css=getComputedStyle(document.documentElement), C1=css.getPropertyValue("--route").trim()||"#6d28d9", C2=css.getPropertyValue("--route-back").trim()||"#0891b2";
   const back=res.sketch?res.coords.map(()=>false):returnMask(res.coords), hasBack=back.some(Boolean);
   if(res.sketch){ /* 스케치: 오가는 길 = 회색 점선, 스케치 본체 = 보라 */
+    const m=res.sketch.main;[["S",m[0],"a"],["F",m[m.length-1],"b"]].forEach(([t,p,c])=>L.marker(p,{icon:L.divIcon({className:"",html:'<div class="pin '+c+'">'+t+'</div>',iconSize:[24,24],iconAnchor:[12,12]}),interactive:false}).addTo(arrLayer));
     line=L.polyline(res.coords,{opacity:0,interactive:false}).addTo(map);
     res.sketch.legs.forEach(l=>L.polyline(l,{color:"#6b7280",weight:4,opacity:.8,dashArray:"6 6",interactive:false}).addTo(arrLayer));
     L.polyline(res.sketch.main,{color:C1,weight:6,opacity:.95,interactive:false}).addTo(arrLayer);
@@ -1413,11 +1463,11 @@ function draw(res){
 async function generate(newSeed){
   if(newSeed) state.seed++;
   const target=parseFloat($("#dist").value)*1000;
-  if(!state.A){status("출발지를 먼저 지정해 주세요.",true);return;}
+  if(!state.A&&state.mode!=="sketch"){status("출발지를 먼저 지정해 주세요.",true);return;}
   if(!(target>=500&&target<=60000)){status("목표 거리는 0.5~60km 사이로 입력해 주세요.",true);return;}
   if(state.mode==="a2b"&&!state.B){status("도착지를 지정해 주세요.",true);return;}
   const shape=state.mode==="sketch"?sketchShape():null;
-  if(state.mode==="sketch"&&!shape){status("그릴 글자·숫자를 입력해 주세요 (예: 815).",true);return;}
+  if(state.mode==="sketch"&&!shape){status($("#shape").value==="digital"?"그릴 숫자를 입력해 주세요 (예: 1030).":"그릴 글자·숫자를 입력해 주세요 (예: 815).",true);return;}
   /* random every run: direction (±20° around user's choice), rotation, shape */
   const dirSel=$("#dir").value, brg=dirSel!==""?(+dirSel+rnd(-20,20)+360)%360:rnd(0,360);
   const side=Math.random()<0.5?-1:1;
@@ -1433,7 +1483,7 @@ async function generate(newSeed){
       if(GRAPH){status("Garmin 공개 러닝 코스 참조 중…");await usePopular(GRAPH);}
     }
     if(GRAPH)renderPref();
-    if(state.mode==="sketch") res=await genSketch(state.A,target,shape,step);
+    if(state.mode==="sketch"){const c=map.getCenter(),C=state.A||[c.lat,c.lng];res=await genSketchFind(C,target,shape,+$("#skR").value||6000,step);showSkCands(res);}
     else if($("#useLib").checked&&LIB.length&&!(state.mode==="a2b"&&hav(state.A,state.B)<150)&&!(S.engine==="local"&&$("#rstyle").value==="local"&&(state.mode==="loop"||state.mode==="a2b")))
       res=await genRef(state.mode,state.A,state.B,target,step);
     if(res) ;
@@ -1465,10 +1515,9 @@ async function generate(newSeed){
     if(!res.sketch){res.ut=badUturns(res.coords,res.ref,[res.turn,res.extTurn].filter(Boolean)).length; if(res.key) lastRef=res.key;}
     cur=res; draw(res);
     if(res.sketch){const f=res.sketch.fid;
-      status(res.total>target*1.01?"도로 사정상 최대 거리를 넘었습니다. 최대 거리를 늘리거나 출발지를 옮겨 보세요."
-        :f>=0.8?"모양이 잘 맞는 스케치 맵입니다."
+      status(f>=0.8?"모양이 잘 맞는 스케치 맵입니다. 아래 후보 버튼으로 다른 장소도 볼 수 있습니다."
         :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 맵 그리기'로 다른 위치를 시도해 보세요."
-        :"이 근처 도로로는 알아보기 어렵습니다. 최대 거리를 늘리거나(글자가 커짐), 글자 수를 줄이거나, 바둑판 도로가 많은 곳으로 출발지를 옮겨 보세요.",res.total>target*1.01||f<0.68);}
+        :"이 범위 도로로는 알아보기 어렵습니다. 찾을 범위를 넓히거나, 모양 거리를 늘리거나(모양이 커짐), 글자 수를 줄여 보세요.",f<0.68);}
     else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리에 맞는 달리기 맵입니다.":"오차가 큽니다. '다른 맵 그리기'로 재시도해 보세요."), !!res.note);
   }catch(e){
     status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"길 찾기 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
@@ -1537,7 +1586,7 @@ paceEl.addEventListener("keydown",e=>{if(e.key==="Enter")paceEl.blur();});
 $("#useLib").checked=load("useLib",true); $("#useLib").addEventListener("change",e=>save("useLib",e.target.checked));
 loadLib();
 
-$("#shape").addEventListener("change",e=>{$("#sketchText").hidden=e.target.value!=="text";});
+$("#shape").addEventListener("change",e=>{const v=e.target.value,t=$("#sketchText");t.hidden=!(v==="text"||v==="digital");t.placeholder=v==="digital"?"숫자 (예: 1030)":"예: 815, LOVE";t.inputMode=v==="digital"?"numeric":"text";});
 
 /* restore last session */
 const lm=load("mode","loop");document.querySelector('#mode button[data-mode="'+lm+'"]').click();
