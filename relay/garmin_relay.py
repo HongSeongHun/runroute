@@ -294,6 +294,26 @@ def mine_heat(s, w, n, e):
     res = {"cell": CELL, "cells": [[a, b, c] for (a, b), c in cnt.items() if c >= 2], "runs": used}
     if len(_mine_memo) > 30: _mine_memo.clear()
     _mine_memo[k] = res; return res
+def mine_runs(lat, lon, r=1500, rmax=3000):
+    """출발·도착이 기준점 r 안이고 전체가 rmax 안인 내 러닝(루프)들: 선은 약 80m 간격으로 축약"""
+    c = {"latitude": lat, "longitude": lon}; out = []
+    for f in os.listdir(MINE):
+        if not f.endswith(".json"): continue
+        try: x = json.load(open(os.path.join(MINE, f)))
+        except Exception: continue
+        P = x.get("pts") or []
+        if len(P) < 10 or not (2000 <= (x.get("d") or 0) <= 30000): continue
+        ll = lambda p: {"latitude": p[0], "longitude": p[1]}
+        if hav(c, ll(P[0])) > r or hav(c, ll(P[-1])) > r: continue
+        if max(hav(c, ll(p)) for p in P[::5]) > rmax: continue
+        o = [P[0]]
+        for q in P[1:]:
+            if hav(ll(o[-1]), ll(q)) >= 80: o.append(q)
+        if o[-1] != P[-1]: o.append(P[-1])
+        out.append({"id": x["id"], "d": x["d"], "t": (x.get("t") or "")[:10], "pts": o})
+    out.sort(key=lambda r_: r_["t"], reverse=True)
+    return {"runs": out}
+
 def mine_loop():
     import time
     time.sleep(120)
@@ -393,6 +413,12 @@ class H(BaseHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             try: return self.reply(200, maps_ensure(float(q["lat"]), float(q["lon"])))
+            except Exception as ex: return self.reply(400, {"error": str(ex)})
+        if p0 == "/mine/runs":
+            if not self.authed(): return
+            from urllib.parse import urlparse, parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try: return self.reply(200, mine_runs(float(q["lat"]), float(q["lon"]), float(q.get("r", 1500)), float(q.get("rmax", 3000))))
             except Exception as ex: return self.reply(400, {"error": str(ex)})
         if p0 == "/mine":
             if not self.authed(): return
