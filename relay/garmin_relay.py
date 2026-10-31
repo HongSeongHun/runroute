@@ -248,6 +248,60 @@ def warm_loop():
         except Exception: traceback.print_exc()
         time.sleep(24 * 3600)
 
+# ---- 내 러닝 기록 (사용자 지정 2026-10-31: '내 러닝코스 근처를 기본으로') ----
+# 최근 12개월 내 러닝 활동 GPS 선을 ~/.runroute/mine/ 에 저장(활동당 1회), 하루 한 번 새 활동만 추가.
+# /mine?s&w&n&e (키 필요): 범위 안 칸(약 27m)별 '내가 달린 횟수' 반환. 좌표 원본은 보내지 않음.
+MINE = os.path.expanduser("~/.runroute/mine"); os.makedirs(MINE, exist_ok=True)
+def mine_sync(days=365):
+    import time, datetime
+    g = garmin(); end = datetime.date.today(); start = end - datetime.timedelta(days=days); page = 0; n = 0
+    while True:
+        L = g.client.connectapi("/activitylist-service/activities/search/activities", params={"startDate": str(start), "endDate": str(end), "start": page*100, "limit": 100})
+        if not L: break
+        for a in L:
+            if "run" not in ((a.get("activityType") or {}).get("typeKey") or "") or not a.get("startLatitude"): continue
+            f = os.path.join(MINE, f"{a['activityId']}.json")
+            if os.path.exists(f): continue
+            try:
+                d = g.client.connectapi(f"/activity-service/activity/{a['activityId']}/details", params={"maxChartSize": 100, "maxPolylineSize": 4000})
+                pts = [[round(p["lat"], 6), round(p["lon"], 6)] for p in ((d.get("geoPolylineDTO") or {}).get("polyline") or []) if p.get("lat") is not None]
+                o = pts[:1]
+                for q in pts[1:]:
+                    if hav({"latitude": o[-1][0], "longitude": o[-1][1]}, {"latitude": q[0], "longitude": q[1]}) >= 20: o.append(q)
+                json.dump({"id": a["activityId"], "d": round(a.get("distance") or 0), "t": a.get("startTimeLocal"), "pts": o}, open(f, "w")); n += 1; time.sleep(0.4)
+            except Exception: traceback.print_exc()
+        page += 1
+        if len(L) < 100: break
+    _mine_memo.clear(); return n
+_mine_memo = {}
+def mine_heat(s, w, n, e):
+    k = (round(s, 3), round(w, 3), round(n, 3), round(e, 3), len(os.listdir(MINE)))
+    if k in _mine_memo: return _mine_memo[k]
+    cnt = {}; used = 0
+    for f in os.listdir(MINE):
+        if not f.endswith(".json"): continue
+        try: r = json.load(open(os.path.join(MINE, f)))
+        except Exception: continue
+        P = r.get("pts") or []
+        if not any(s <= a <= n and w <= b <= e for a, b in P): continue
+        used += 1; seen = set()
+        for i in range(1, len(P)):
+            (la1, lo1), (la2, lo2) = P[i-1], P[i]; kk = max(1, int(max(abs(la2-la1), abs(lo2-lo1)) / (CELL/2)))
+            for t in range(kk + 1):
+                la = la1 + (la2-la1)*t/kk; lo = lo1 + (lo2-lo1)*t/kk
+                if s <= la <= n and w <= lo <= e: seen.add((int(math.floor(la/CELL)), int(math.floor(lo/CELL))))
+        for c in seen: cnt[c] = cnt.get(c, 0) + 1
+    res = {"cell": CELL, "cells": [[a, b, c] for (a, b), c in cnt.items() if c >= 2], "runs": used}
+    if len(_mine_memo) > 30: _mine_memo.clear()
+    _mine_memo[k] = res; return res
+def mine_loop():
+    import time
+    time.sleep(120)
+    while True:
+        try: sys.stderr.write(f"[mine] 새 러닝 활동 {mine_sync(30)}개 저장\n")
+        except Exception: traceback.print_exc()
+        time.sleep(24 * 3600)
+
 # ---- 바탕 지도(벡터 타일) Mac 보관 · 휴대폰 제공 (사용자 지정 2026-10-30: 'Mac에 저장 → 휴대폰이 가져오기, 위치 기반') ----
 # Protomaps 일일 빌드(OpenStreetMap 데이터, ODbL)에서 지역만 잘라 ~/.runroute/maps/*.pmtiles 로 보관.
 # 휴대폰은 /maps/index.json 으로 지역 목록을 받고, 화면이 들어 있는 지역 파일을 Range 요청으로 필요한 조각만 읽음.
@@ -340,6 +394,15 @@ class H(BaseHTTPRequestHandler):
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             try: return self.reply(200, maps_ensure(float(q["lat"]), float(q["lon"])))
             except Exception as ex: return self.reply(400, {"error": str(ex)})
+        if p0 == "/mine":
+            if not self.authed(): return
+            from urllib.parse import urlparse, parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try:
+                s_, w_, n_, e_ = (float(q[k]) for k in ("s", "w", "n", "e"))
+                if not (0 < n_ - s_ <= 0.3 and 0 < e_ - w_ <= 0.3): return self.reply(400, {"error": "범위가 너무 큽니다"})
+                return self.reply(200, mine_heat(s_, w_, n_, e_))
+            except Exception as ex: return self.reply(400, {"error": str(ex)})
         if self.path.rstrip("/") in ("", "/health"):
             if not self.authed(): return
             try: self.reply(200, {"ok": True, "garmin": garmin().get_full_name()})
@@ -377,4 +440,5 @@ if __name__ == "__main__":
     if "--print-key" in sys.argv: print(k); sys.exit(0)
     print(f"RunRoute Garmin relay on http://{HOST}:{PORT}  (key file {KEY_FILE})", flush=True)
     threading.Thread(target=warm_loop, daemon=True).start()
+    threading.Thread(target=mine_loop, daemon=True).start()
     ThreadingHTTPServer((HOST, PORT), H).serve_forever()
