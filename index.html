@@ -718,7 +718,7 @@ function applyMine(g,M){if(!M||!M.cells||!M.cells.length)return;const key=M.cell
   const H=new Map(),cs=M.cell;for(const [a,b,c] of M.cells)H.set(a+","+b,c);
   const cellOf=(la,lo)=>[Math.floor(la/cs),Math.floor(lo/cs)],get=(a,b,r)=>{let m=0;for(let da=-r;da<=r;da++)for(let db=-r;db<=r;db++){const c=H.get((a+da)+","+(b+db));if(c>m)m=c;}return m;};
   g.mine=new Float32Array(g.to.length);g.mineNear=new Uint8Array(g.n);let n=0;
-  for(let u=0;u<g.n;u++){const [a,b]=cellOf(g.la[u],g.lo[u]);if(get(a,b,5)>=2)g.mineNear[u]=1;}   /* 약 150m 안에 내가 달린 길 */
+  for(let u=0;u<g.n;u++){const [a,b]=cellOf(g.la[u],g.lo[u]);if(get(a,b,12)>=2)g.mineNear[u]=1;}   /* 약 330m 안에 내가 달린 길(내 코스 '주변'까지 허용) */
   for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){const v=g.to[e];if(g.wt[e]>=ORANGE_W)continue;const [a,b]=cellOf((g.la[u]+g.la[v])/2,(g.lo[u]+g.lo[v])/2),m=get(a,b,1);
     if(m>=2){g.mine[e]=m;g.cm[e]*=Math.max(0.45,1-0.1*Math.min(m,6));n++;}}
   g.wcls=null;g.mineKey=key;g.mineInfo={runs:M.runs,edges:n};}
@@ -1475,7 +1475,8 @@ function draw(res){
   if(res.unified)ri.textContent+=" · 겹치는 길 "+res.unified+"곳 선 하나로 통일";
   if(GRAPH&&GRAPH.popInfo)ri.textContent+=" · Garmin 공개 러닝 코스 "+GRAPH.popInfo.n+"개 중 많이 겹치는 길(3개 이상) 우대"+(GRAPH.popInfo.crawling?"(추가 "+GRAPH.popInfo.crawling+"개 수집 중)":"");
   if(GRAPH&&GRAPH.mineInfo)ri.textContent+=" · 내 러닝 기록 "+GRAPH.mineInfo.runs+"회 기준(내가 달린 길 우대)";
-  if(res.mine)ri.textContent+=" · 내가 실제로 달린 코스 "+res.mine.n+"개를 이어 만듦("+res.mine.dates.map((d,i)=>d.slice(2).replace(/-/g,".")+" "+(res.mine.dists[i]/1000).toFixed(1)+"km").join(", ")+")";
+  if(res.mine)ri.textContent+=" · 내가 실제로 달린 코스 "+res.mine.n+"개("+res.mine.dates.map((d,i)=>d.slice(2).replace(/-/g,".")+" "+(res.mine.dists[i]/1000).toFixed(1)+"km").join(", ")+")"+(res.mine.walk?" + 주변 길 "+(res.mine.walk/1000).toFixed(1)+"km":"");
+  if(res.q)ri.textContent+=" · 같은 길 반복 "+Math.round(res.q.rep*100)+"% · 내 길·인기 길 "+Math.round(res.q.known*100)+"%";
   if(res.laps>1)ri.textContent+=" · 같은 코스 "+res.laps+"바퀴(1바퀴 "+(res.lapLen/1000).toFixed(1)+"km)";
   if(GRAPH&&GRAPH.parkN)ri.textContent+=" · 공원 안 길 제외";
   if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
@@ -1529,7 +1530,7 @@ function routeVia(g,pts){/* 내 기록 선을 따라가는 A*: 기록 선 30m �
   const ids=[];let acc=0;for(let i=0;i<pts.length;i++){if(i&&i<pts.length-1){acc+=hav(pts[i-1],pts[i]);if(acc<700)continue;acc=0;}const u=streetNode(g,pts[i],60);if(u>=0&&ids[ids.length-1]!==u)ids.push(u);}
   if(ids.length<2)return null;let path=[ids[0]];for(let k=1;k<ids.length;k++){const seg=astar(g,path[path.length-1],ids[k],pen);if(!seg)continue;path=path.concat(seg.slice(1));}
   return path.length>1?path:null;}
-async function genFromMine(A,E,target,onStep){const g=GRAPH;if(!g||!inBox(g.box,A))return null;
+async function genFromMine(A,E,target,onStep){const g=GRAPH;genFromMine.pool=[];if(!g||!inBox(g.box,A))return null;
   let runs=await fetchMineRuns(A);if(!runs)return null;runs=runs.filter(r=>r.pts.every(p=>inBox(g.box,p)));if(runs.length<2)return null;
   onStep("내 러닝 기록 "+runs.length+"개로 조합 찾는 중",0);await sleep(0);
   const C=60,cellsOf=r=>{const S2=new Set();for(const p of r.pts){const q=toXY(g,p);S2.add(Math.floor(q[0]/C)+","+Math.floor(q[1]/C));}return S2;};runs.forEach(r=>{r.cs=cellsOf(r);});
@@ -1547,16 +1548,25 @@ async function genFromMine(A,E,target,onStep){const g=GRAPH;if(!g||!inBox(g.box,
   for(let k=0;k<top.length;k++){onStep("내 코스 조합 "+(k+1)+"/"+top.length+" 길 맞추는 중",0);await sleep(0);const c=top[k];
     /* 순서: 끝점이 다음 시작점과 가까운 순(탐욕) */
     const ord=[],left=c.pick.slice();let at=A;while(left.length){let bi=0,bd=Infinity;left.forEach((r,i)=>{const d=hav(at,r.pts[0]);if(d<bd){bd=d;bi=i;}});const r=left.splice(bi,1)[0];ord.push(r);at=r.pts[r.pts.length-1];}
-    let path=[streetNode(g,A)];if(path[0]<0)return null;
-    for(const r of ord){const p=routeVia(g,r.pts);if(!p)continue;const link=astar(g,path[path.length-1],p[0]);if(!link)continue;path=path.concat(link.slice(1),p.slice(1));}
+    let path=[streetNode(g,A)];if(path[0]<0)return null;const cuts=[];
+    for(const r of ord){const p=routeVia(g,r.pts);if(!p)continue;const link=astar(g,path[path.length-1],p[0]);if(!link)continue;path=path.concat(link.slice(1),p.slice(1));cuts.push({n:path.length,r});}
     const endN=E?streetNode(g,E):streetNode(g,A),fin=astar(g,path[path.length-1],endN);if(!fin)continue;path=path.concat(fin.slice(1));
     const o=pathOut(g,path),err=(o.dist-target)/target;
-    const cand={coords:o.coords,total:o.dist,err,raw:c.pick.reduce((a,r)=>a+r.d,0),mine:{n:ord.length,dates:ord.map(r=>r.t),dists:ord.map(r=>r.d)}};
+    const cand={coords:o.coords,total:o.dist,err,raw:c.pick.reduce((a,r)=>a+r.d,0),path,cuts,mine:{n:ord.length,dates:ord.map(r=>r.t),dists:ord.map(r=>r.d)}};
+    (genFromMine.pool=genFromMine.pool||[]).push(cand);
     if(!rb||Math.abs(err)<Math.abs(rb.err))rb=cand;if(!best||Math.abs(err)<Math.abs(best.err))best=cand;
     if(Math.abs(err)<=0.04)break;}
   /* 다시 그린 길이/원래 기록 길이 비율로 보정해 한 번 더(이어 붙이는 길·우회만큼) */
   if(!rb||Math.abs(best.err)<=0.04)break;F=Math.max(1,(rb.total-dAB)/rb.raw);}
   return best;}
+/* 경로 품질: 같은 길 반복 비율(rep), 내가 달린 길·다른 러너 인기 길 비율(known), 출발지에서 가장 먼 거리(maxR) */
+function routeQ(g,coords,A){if(!g.ll2i){g.ll2i=new Map();for(let k=0;k<g.n;k++)g.ll2i.set(g.la[k]+","+g.lo[k],k);}
+  const use=new Map(),E=[];let T=0,kn=0,mx=0;
+  for(let i=1;i<coords.length;i++){const d=hav(coords[i-1],coords[i]);T+=d;mx=Math.max(mx,hav(coords[i],A));const u=g.ll2i.get(coords[i-1][0]+","+coords[i-1][1]),v=g.ll2i.get(coords[i][0]+","+coords[i][1]);
+    if(u==null||v==null)continue;const k=u<v?u+"-"+v:v+"-"+u;use.set(k,(use.get(k)||0)+1);E.push([k,d]);
+    for(let e=g.off[u];e<g.off[u+1];e++)if(g.to[e]===v){if((g.mine&&g.mine[e]>=2)||(g.pop&&g.pop[e]>=3))kn+=d;break;}}
+  let rep=0;for(const [k,d] of E)if(use.get(k)>1)rep+=d/use.get(k)*(use.get(k)-1);
+  return {rep:T?rep/T:0,known:T?kn/T:0,maxR:mx};}
 /* ---------- 진행률 표시 (사용자 요청 2026-10-30) ----------
    단계별 구간(도로망 0~20%, Garmin 참조 20~25%, 맵 계산 25~88%, 정리 88~98%)을 상태 문구에서 추정하고,
    멈춘 것처럼 보이지 않게 0.4초마다 조금씩(남은 양의 1.5%) 올라감. 100%는 끝났을 때만 */
@@ -1603,14 +1613,27 @@ async function generate(newSeed){
     if(res) ;
     else{
       if(S.engine==="local"&&$("#rstyle").value==="local"&&(state.mode==="loop"||state.mode==="a2b")){
-        /* 8km 이상: 내 러닝 기록 조합을 먼저 시도 */
-        if(target>=8000){try{const m=await genFromMine(state.A,state.mode==="a2b"?state.B:null,target,step);
-          if(m&&Math.abs(m.err)<=0.12){const pv=finalizeRoute({...m,coords:m.coords.slice()},target,state.mode,{maxExt:0});if(pv.total>=target-Math.max(1200,target*0.1)&&pv.total<=target*1.1)res=m;}}catch(e){}}
+        /* 8km 이상 (사용자 지정 2026-10-31: 상황에 따라 — 중복이 너무 많지 않게, 내 코스 + 그 주변 다른 러너들이 도는 길까지):
+           후보 ① 내 러닝 기록 조합 ② 내 코스 일부 + 나머지는 주변 동네 골목(다른 러너 인기 길·내 코스 330m 안 우대) ③ 동네 골목만
+           → 같은 길 반복 비율·내/인기 길 비율·거리 오차로 채점해 가장 좋은 것 */
+        const E0=state.mode==="a2b"?state.B:null,okLen=x=>{const pv=finalizeRoute({...x,coords:x.coords.slice()},target,state.mode,{maxExt:0});return pv.total>=target-Math.max(1200,target*0.1)&&pv.total<=target*1.1;};
+        const pool=[];
+        if(target>=8000){try{const m=await genFromMine(state.A,E0,target,step);
+            for(const c of (genFromMine.pool||[]).slice().sort((p,q)=>Math.abs(p.err)-Math.abs(q.err)).slice(0,3))if(Math.abs(c.err)<=0.12&&okLen(c))pool.push({r:c,kind:"mine"});
+            /* ② 섞기: 내 코스 앞부분(목표의 40~70%) + 남은 거리는 출발지 기준 동네 골목 */
+            for(const c of (genFromMine.pool||[]).slice(0,4)){if(!c.cuts||c.cuts.length<2||!E0&&false)continue;
+              for(let k=c.cuts.length-1;k>=1;k--){const pre=c.path.slice(0,c.cuts[k-1].n),po=pathOut(GRAPH,pre),restD=target-po.dist;if(po.dist<target*0.4)break;if(po.dist>target*0.7)continue;
+                step("내 코스 + 주변 길 섞는 중",0);const back=astar(GRAPH,pre[pre.length-1],streetNode(GRAPH,state.A));if(!back)continue;const bo=pathOut(GRAPH,back);
+                const w2=await genWalkAsync(state.A,E0,restD-bo.dist,step);if(!w2)continue;
+                const coords=po.coords.concat(bo.coords.slice(1),w2.coords.slice(1)),total=cumDist(coords).at(-1),r={coords,total,err:(total-target)/target,mine:{...c.mine,n:k,dates:c.mine.dates.slice(0,k),dists:c.mine.dists.slice(0,k),walk:w2.total}};
+                if(Math.abs(r.err)<=0.12&&okLen(r))pool.push({r,kind:"mix"});break;}}}catch(e){}}
         step("동네 골목 길 찾는 중",0);await sleep(0);
-        const w=res?null:await genWalkAsync(state.A,state.mode==="a2b"?state.B:null,target,step);
+        const w=await genWalkAsync(state.A,state.mode==="a2b"?state.B:null,target,step);
         /* 정리(짧은 우회 제거·겹친 길 통일) 뒤에도 목표의 90% 이상 남아야 채택 → 모자란 만큼 멀리 왕복하지 않게 */
         const keeps=x=>{const pv=finalizeRoute({...x,coords:x.coords.slice()},target,state.mode,{maxExt:0});return pv.total>=target-Math.max(1200,target*0.1);};   /* 남는 부족분은 도착 후 연장 한도(1.2km 또는 10%) 안이어야 함 */
-        if(!res&&w&&Math.abs(w.err)<=0.08&&keeps(w)){res=w;}   /* 동네 골목 우선: 오차 8% 이내면 채택 */
+        if(w&&Math.abs(w.err)<=0.08&&keeps(w))pool.push({r:w,kind:"walk"});
+        if(pool.length){for(const p of pool){const q=routeQ(GRAPH,p.r.coords,state.A);p.q=q;p.sc=Math.abs(p.r.err)*4+q.rep*2.5-q.known*1.0+Math.max(0,q.maxR-2800)/1000;}
+          pool.sort((a,b)=>a.sc-b.sc);res=pool[0].r;res.q=pool[0].q;res.kind=pool[0].kind;}   /* 동네 골목 우선: 오차 8% 이내면 채택 */
         /* 긴 거리(사용자 지정 2026-10-31): 동네 안에서 한 번에 못 채우면 먼 곳으로 나가지 않고
            동네 루프를 여러 바퀴 반복(내 30~35km 기록도 집 반경 2.3km 안). 출발→도착은 루프 반복 뒤 도착지로 */
         if(!res&&target>=8000&&GRAPH){let dAB=0,tail=null;
