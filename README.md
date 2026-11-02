@@ -445,3 +445,12 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - index.html 211.7KB → 195.0KB. 기능 변화 없음(루프·반환점·A→B·스케치·Garmin 엔진·공유·진행률 E2E 통과).
 - courses/ 데이터와 build_course_index.py는 앱에서 더 이상 쓰지 않지만 파일은 그대로 둠.
 - 백업: index.v37b.html.
+
+## v38 변경 (2026-11-02) — 아파트 단지 안 길 제외 보강 (Mỹ Tú 단지 사례)
+- 원인 1: 단지 판정이 OSM `residential=apartments` 또는 이름 "Chung cư/Căn hộ"인 폴리곤만 인정. PMH의 Mỹ Tú I(H31)·Mỹ Tú II(CN2-1)·Lam Thiên Lục Địa II는 `landuse=residential`+이름/ref만 있어 누락.
+- 원인 2: 이름 있는 길은 단지 안이어도 공용 도로로 간주 → "Khu phố Mỹ Tú 1/2" 같은 단지 내부 길이 통과.
+- 원인 3: Garmin 엔진 결과와 공사 우회(avoidBlocks)는 앱 도로망 규칙(단지·공원 제외)을 거치지 않음(공사 우회는 외부 OSRM 사용).
+- 조치: 이름·ref 있는 주거 폴리곤(25ha 이하)을 단지로 인정, 이름 있는 길은 경계에서 15m 이상 안쪽일 때만 내부 길로 판정, "Khu phố/Khu biệt thự/Khu căn hộ/Chung cư" 이름 길은 위치와 관계없이 제외.
+- 모든 엔진 결과에 최종 검사(innerRuns: 단지·공원 길 위 40m 이상) → 앱 도로망 A*로 해당 구간 재연결(avoidInner). Garmin 자동 왕복 후보 점수에 단지 통과 감점. 공사 우회도 앱 도로망 A* 사용.
+- OSM 캐시 rr-osm-v3로 갱신(기존 캐시 무시). 해당 블록 기준 테스트: 5·8·10·15km 루프 단지 내부 통과 0m, Garmin 모의 경로의 단지 통과 구간 재연결 확인. 전체 도로 길이의 약 7%가 단지 내부 길로 제외됨.
+- 백업: index.v38a.html.

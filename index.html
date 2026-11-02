@@ -328,7 +328,7 @@ async function avoidBlocks(r,opt={}){
     const P=c[a],Q=c[b],B=h.blk,toLL=(x,y)=>[B.lat0+y/B.ky,106.7+x/B.kx],cands=[];
     for(let k=0;k<12;k++){const an=k*Math.PI/6;cands.push(toLL(B.cx+(B.R+300)*Math.sin(an),B.cy+(B.R+300)*Math.cos(an)));}
     cands.sort((u,v)=>(hav(P,u)+hav(u,Q))-(hav(P,v)+hav(v,Q)));let ok=false;
-    for(const via of cands.slice(0,6)){let s2;try{s2=await routeNet([P,via,Q],{});}catch(e){continue;}
+    for(const via of cands.slice(0,6)){let s2;try{s2=(GRAPH&&[P,via,Q].every(p=>inBox(GRAPH.box,p)))?routeLocal([P,via,Q]):await routeNet([P,via,Q],{});}catch(e){continue;}
       if(!blockHit(s2.coords)){const nc=c.slice(0,a).concat(s2.coords,c.slice(b+1));r={...r,coords:nc,dist:cumDist(nc).at(-1)};ok=true;break;}}
     if(!ok)throw new Error("공사(통행 불가) 구간을 피하는 길을 찾지 못했습니다. 출발·도착지를 옮겨 다시 시도해 주세요.");}
   if(blockHit(r.coords))throw new Error("공사(통행 불가) 구간을 피하는 길을 찾지 못했습니다.");
@@ -499,10 +499,10 @@ async function loadGraph(center,need){
   if(GRAPH&&GRAPH.key===key) return GRAPH;
   const box=boxAround(cc,r+800);
   const bb=box.map(v=>v.toFixed(4)).join(",");
-  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;(way["leisure"~"^(park|garden)$"]('+bb+');rel["leisure"~"^(park|garden)$"]('+bb+');way["landuse"="residential"]["residential"="apartments"]('+bb+');way["landuse"="residential"]["name"~"^(Chung c|Căn hộ|Khu căn hộ)",i]('+bb+'););out geom qt;';
+  const q='[out:json][timeout:25];way["highway"~"^('+Object.keys(HW_W).join("|")+')$"]["foot"!~"^no$"]["access"!~"^(private|no)$"]["area"!~"^yes$"]('+bb+');out body geom qt;node["highway"~"^(crossing|traffic_signals)$"]('+bb+');out skel qt;(way["leisure"~"^(park|garden)$"]('+bb+');rel["leisure"~"^(park|garden)$"]('+bb+');way["landuse"="residential"]["residential"="apartments"]('+bb+');way["landuse"="residential"]["name"]('+bb+');way["landuse"="residential"]["ref"]('+bb+'););out geom qt;';
   const ckey="https://runroute.local/osm?"+encodeURIComponent(q);
   let txt=null,cache=null,last="";
-  try{cache=await caches.open("rr-osm-v2");const hit=await cache.match(ckey);
+  try{cache=await caches.open("rr-osm-v3");const hit=await cache.match(ckey);
     if(hit&&Date.now()-(+hit.headers.get("x-rr-time")||0)<7*864e5) txt=await hit.text();}catch(e){}
   /* 공용 서버 혼잡(429/502/504) 대비: 서버 2곳 × 재시도(대기 2s→6s) */
   for(const ep of OVERPASS_EP){if(txt!==null)break;
@@ -625,7 +625,11 @@ function parkRings(j,pred=t=>/^(park|garden)$/.test(t.leisure||"")){const rings=
    예외: 사용자가 직접 그린 좋아하는 길(빨간 선)과 겹치는 공원 길만 prefApply 에서 다시 허용 */
 function blockParks(g){if(!g.park)return;g.blk=g.blk||new Uint8Array(g.to.length);g.parkBlk=new Uint8Array(g.to.length);
   for(let e=0;e<g.to.length;e++)if((g.park[e]||(g.comp&&g.comp[e]))&&!g.blk[e]){g.blk[e]=1;g.parkBlk[e]=1;}}
-const COMPOUND=t=>t.landuse==="residential"&&(t.residential==="apartments"||/^(chung c|căn hộ|khu căn hộ)/i.test(t.name||""));
+const COMPOUND=t=>t.landuse==="residential"&&(t.residential==="apartments"||!!t.name||!!t.ref);
+/* 단지 내부 도로 이름(Khu phố Mỹ Tú 2 등): 폴리곤 밖(단지 사이 틈)에 그려져 있어도 내부 통로로 봄 (2026-11-02) */
+const COMP_NAME=/^(khu phố|khu biệt thự|khu căn hộ|chung cư|căn hộ)/i;
+const COMP_MAX_AREA=250000;   /* 25ha 넘는 큰 '동네' 폴리곤은 단지로 보지 않음(공용 도로까지 막히지 않게) */
+const COMP_INSET=15;          /* 이름 있는 길은 단지 경계에서 15m 이상 안쪽일 때만 내부 길로 봄(경계 공용 도로 보호) */
 const INNER_CLS=new Set(["service","residential","living_street","footway","path","pedestrian","track","cycleway","steps","unclassified"]);
 function polyTester(g,rings){const polys=rings.map(r=>{const xs=r.map(p=>(p.lon-g.lon0)*g.kx),ys=r.map(p=>(p.lat-g.lat0)*g.ky);
     return {xs,ys,x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};});
@@ -634,8 +638,37 @@ function polyTester(g,rings){const polys=rings.map(r=>{const xs=r.map(p=>(p.lon-
   return (x,y)=>{for(const P of polys)if(inside(P,x,y))return true;return false;};}
 /* 아파트 단지(chung cư) 내부 길 제외 (사용자 지정 2026-10-30): landuse=residential + residential=apartments(또는 이름이 Chung cư/Căn hộ)
    폴리곤 안의 '이름 없는' 내부 통로·보행로는 맵에서 뺌. 이름 있는 공용 도로는 유지 */
-function compoundEdges(g,j){const rings=parkRings(j,COMPOUND);g.comp=new Uint8Array(g.to.length);g.compN=rings.length;if(!rings.length)return;const inP=polyTester(g,rings);
-  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(g.ename[e]||!INNER_CLS.has(g.ecls[e]))continue;const v=g.to[e];if(inP((g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2))g.comp[e]=1;}}
+function compoundEdges(g,j){g.comp=new Uint8Array(g.to.length);
+  const xyR=r=>r.map(p=>[(p.lon-g.lon0)*g.kx,(p.lat-g.lat0)*g.ky]);
+  const area=P=>{let a=0;for(let i=0,k=P.length-1;i<P.length;k=i++)a+=(P[k][0]+P[i][0])*(P[k][1]-P[i][1]);return Math.abs(a/2);};
+  const polys=parkRings(j,COMPOUND).map(xyR).filter(P=>area(P)<=COMP_MAX_AREA).map(P=>({P,x0:Math.min(...P.map(q=>q[0])),x1:Math.max(...P.map(q=>q[0])),y0:Math.min(...P.map(q=>q[1])),y1:Math.max(...P.map(q=>q[1]))}));
+  g.compN=polys.length;
+  const inside=(P,x,y)=>{let c=false;for(let i=0,k=P.length-1;i<P.length;k=i++){const [xi,yi]=P[i],[xk,yk]=P[k];if((yi>y)!==(yk>y)&&x<(xk-xi)*(y-yi)/(yk-yi)+xi)c=!c;}return c;};
+  const edgeD=(P,x,y)=>{let m=Infinity;for(let i=0,k=P.length-1;i<P.length;k=i++){const [ax,ay]=P[k],[bx,by]=P[i],dx=bx-ax,dy=by-ay,L=dx*dx+dy*dy;let t=L?((x-ax)*dx+(y-ay)*dy)/L:0;t=Math.max(0,Math.min(1,t));m=Math.min(m,Math.hypot(ax+t*dx-x,ay+t*dy-y));}return m;};
+  const depth=(x,y)=>{let d=-1;for(const Q of polys){if(x<Q.x0||x>Q.x1||y<Q.y0||y>Q.y1||!inside(Q.P,x,y))continue;d=Math.max(d,edgeD(Q.P,x,y));}return d;};
+  for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(!INNER_CLS.has(g.ecls[e]))continue;const nm=g.ename[e]||"";
+    if(nm&&COMP_NAME.test(nm)){g.comp[e]=1;continue;}
+    if(!polys.length)continue;const v=g.to[e],d=depth((g.x[u]+g.x[v])/2,(g.y[u]+g.y[v])/2);
+    if(d>=0&&(!nm||d>=COMP_INSET))g.comp[e]=1;}}
+/* Garmin이 이은 길(앱 도로망 밖 결과)도 단지·공원 안 구간을 찾아 앱 도로망으로 다시 이음 (2026-11-02)
+   경로를 10m 간격으로 찍어, 막힌(단지·공원) 길 위 점이 40m 이상 이어지는 구간만 '안쪽'으로 봄 */
+function innerRuns(coords){const g=GRAPH;if(!g||!g.blk||!coords.length||!inBox(g.box,coords[0]))return [];
+  if(!g.innerGrid){const G=new Set(),C=8;for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(!g.parkBlk||!g.parkBlk[e]||!g.blk[e])continue;const v=g.to[e];if(v<u)continue;
+      const L=Math.max(1,Math.ceil(g.len[e]/4));for(let k=0;k<=L;k++){const x=g.x[u]+(g.x[v]-g.x[u])*k/L,y=g.y[u]+(g.y[v]-g.y[u])*k/L;G.add(Math.floor(x/C)+","+Math.floor(y/C));}}
+    /* 일반(허용) 길이 지나는 칸은 빼서 경계·교차로 오탐 방지 */
+    for(let u=0;u<g.n;u++)for(let e=g.off[u];e<g.off[u+1];e++){if(g.blk[e])continue;const v=g.to[e];if(v<u)continue;const L=Math.max(1,Math.ceil(g.len[e]/4));
+      for(let k=0;k<=L;k++){const x=g.x[u]+(g.x[v]-g.x[u])*k/L,y=g.y[u]+(g.y[v]-g.y[u])*k/L;G.delete(Math.floor(x/C)+","+Math.floor(y/C));}}
+    g.innerGrid=G;g.innerC=C;}
+  const G=g.innerGrid,C=g.innerC,runs=[];let st=-1,len=0;
+  for(let i=1;i<coords.length;i++){const a=toXY(g,coords[i-1]),b=toXY(g,coords[i]),L=Math.hypot(b[0]-a[0],b[1]-a[1]),n=Math.max(1,Math.ceil(L/10));let hit=0;
+    for(let k=0;k<=n;k++){const x=a[0]+(b[0]-a[0])*k/n,y=a[1]+(b[1]-a[1])*k/n;if(G.has(Math.floor(x/C)+","+Math.floor(y/C)))hit++;}
+    if(hit*2>n+1){if(st<0){st=i-1;len=0;}len+=L;}else{if(st>=0&&len>=40)runs.push([st,i-1]);st=-1;}}
+  if(st>=0&&len>=40)runs.push([st,coords.length-1]);return runs;}
+async function avoidInner(r){for(let t=0;t<8;t++){const R=innerRuns(r.coords);if(!R.length)return r;
+    const c=r.coords,cd=cumDist(c);let [a,b]=R[0];while(a>0&&cd[R[0][0]]-cd[a]<150)a--;while(b<c.length-1&&cd[b]-cd[R[0][1]]<150)b++;
+    let s2;try{await sleep(0);s2=routeLocal([c[a],c[b]]);}catch(e){r.innerLeft=R.length;return r;}   /* 앱 도로망 A*(단지·공원 길 막힘) */
+    const nc=c.slice(0,a).concat(s2.coords,c.slice(b+1));r={...r,coords:nc};}
+  r.innerLeft=innerRuns(r.coords).length;return r;}
 /* 왕복 분리 차로(같은 이름의 큰길 두 줄) 사이를 건너는 짧은 구간 = 큰길 횡단 → 안전을 위해 큰 비용(300m 상당)
    (사용자 지정 2026-10-30: 쓸데없이 길을 건넜다 다시 건너는 맵 금지) */
 const XING_COST=300;
@@ -1411,7 +1444,7 @@ async function garminLoop(A,target,dirSel,onStep){await relayEnsure(onStep);
   for(let i=0;i<dirs.length;i++){onStep("Garmin 자동 왕복 "+(i+1)+"/"+dirs.length+" ("+({NORTH:"북",EAST:"동",SOUTH:"남",WEST:"서"})[dirs[i]]+"쪽)",0);
     try{const j=await relayCall("/garmin/roundtrip?lat="+A[0].toFixed(6)+"&lon="+A[1].toFixed(6)+"&dist="+Math.round(target)+"&dir="+dirs[i]);(j.routes||[]).forEach(r=>all.push({...r,dir:dirs[i]}));}catch(e){if(dirs.length===1)throw e;}}
   if(!all.length)throw new Error("Garmin이 이 위치에서 자동 왕복 코스를 만들지 못했습니다.");
-  const sc=r=>{const t=cumDist(r.pts).at(-1),st=routeStats(r.pts),bh=blockHit(r.pts)?1:0;return Math.abs(t-target)/target*3+(st?st.orange*2+st.yellow*0.5:0)+bh*10;};   /* 공사 구간 지나는 후보는 사실상 제외 */
+  const sc=r=>{const t=cumDist(r.pts).at(-1),st=routeStats(r.pts),bh=blockHit(r.pts)?1:0,ir=innerRuns(r.pts).length;return Math.abs(t-target)/target*3+(st?st.orange*2+st.yellow*0.5:0)+bh*10+ir*3;};   /* 공사 구간 지나는 후보는 사실상 제외 */
   all.sort((a,b)=>sc(a)-sc(b));const b=all[0],total=cumDist(b.pts).at(-1);
   return {coords:b.pts,total,err:(total-target)/target,garmin:{kind:"roundtrip",dir:b.dir,alts:all.length}};}
 async function garminVia(res,target,onStep){await relayEnsure(onStep);
@@ -1553,6 +1586,7 @@ async function generate(newSeed){
     if(res.garmin){res.blkWarn=!!blockHit(res.coords);}
     else if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     if(!res.sketch&&!res.garmin){step("짧은 우회 정리",res.total||0);res=finalizeRoute(res,target,state.mode);if(blockHit(res.coords))res=await avoidBlocks(res);}
+    if(innerRuns(res.coords).length){step("아파트 단지·공원 안 길 빼는 중",res.total||0);res=await avoidInner(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     res.coords=thin(res.coords);
     if(!res.sketch){res.ut=badUturns(res.coords,null,[res.turn,res.extTurn].filter(Boolean)).length;}
     cur=res; draw(res);
