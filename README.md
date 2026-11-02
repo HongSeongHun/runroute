@@ -431,3 +431,10 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - 실측(집 출발): 자동 왕복 5/10/21/30km 모두 후보 중 오차 1~3% 이내 존재. 지점 연결은 간격 1.2km면 15~45% 짧아져 300m로 설정(그래도 10~15% 짧아질 수 있음, 정보란 오차 표시).
 - Garmin 결과에는 RunRoute 규칙이 적용되지 않으므로 공사 구간 통과는 경고 표시(자동 왕복 후보 선택 시 사실상 제외).
 - 백업: index.v36.html.
+
+## v36 변경 (2026-11-02) — Garmin 공유 전 Tailscale·중계 연결 먼저 확인
+- `relayCheck()`: ① Tailscale 주소 /maps/index.json(5초, Garmin 호출 없음)로 연결 확인 ② 실패 시 이 기기가 Mac(터치 없음)이면 http://127.0.0.1:8787 로 대체(Mac 미니에서 직접 사용) ③ /health 로 중계 키·Garmin 로그인 확인. 1분 기억.
+- 단계별 안내: Tailscale 안 됨(휴대폰: Tailscale 앱 연결 켜기·Mac 잠자기 확인 / Mac: 메뉴 막대 Tailscale 'Connected' 확인), 키 오류(설정 링크 다시), Garmin 로그인 오류, 중계 서비스 응답 없음. '다시 확인하고 등록' 버튼.
+- Garmin 인기 경로 엔진도 시작 전에 같은 확인. 중계 주소는 `relayBase()`로 통일(로컬 대체 시 자동 사용).
+- E2E: Tailscale 끊김 / 키 오류 / 정상 등록 3가지 모두 기대대로 안내·진행.
+- 백업: index.v37.html.

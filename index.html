@@ -264,6 +264,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
     <button class="btn" type="button" id="gopen">Garmin에서 열기</button>
     <button class="btn" type="button" id="gsend">공유…</button>
   </div>
+  <button class="btn" type="button" id="gretry" style="width:100%;margin-bottom:6px" hidden>다시 확인하고 등록</button>
   <button class="btn" type="button" id="gclose" style="width:100%">닫기</button>
 </dialog>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -680,7 +681,7 @@ const toXY=(g,p)=>[(p[1]-g.lon0)*g.kx,(p[0]-g.lat0)*g.ky];
    25m 격자에 '몇 개 코스가 지나갔나'를 세고, 흰 도로 구간은 그 수에 따라 탐색 비용을 낮춤(최대 35%↓). 공원 회피·공사 구간·주황 회피가 우선. */
 const POP_CACHE=new Map();
 const POP_CLS=new Set(["residential","living_street","unclassified","tertiary","tertiary_link","pedestrian"]);
-async function fetchPopular(box){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();if(!base||!key)return null;
+async function fetchPopular(box){const base=relayBase(),key=(S.relayKey||"").trim();if(!base||!key)return null;
   const k=box.map(v=>v.toFixed(3)).join(",");const hit=POP_CACHE.get(k);if(hit&&!hit.crawling)return hit;
   const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),15000);
   try{const r=await fetch(base+"/popular?s="+box[0].toFixed(4)+"&w="+box[1].toFixed(4)+"&n="+box[2].toFixed(4)+"&e="+box[3].toFixed(4)+"&max=400&mode=heat",{headers:{"X-RR-Key":key},signal:ctl.signal});
@@ -713,7 +714,7 @@ async function usePopular(g){if(!g)return null;try{const P=await fetchPopular(g.
    최근 12개월 내가 2번 이상 달린 칸(약 27m)의 길은 비용을 크게 낮추고(최대 55%↓),
    내가 달린 곳에서 150m 넘게 벗어나는 길은 동네 골목 걷기에서 강하게 감점 → 처음 가 보는 먼 곳으로 나가지 않음 */
 const MINE_CACHE=new Map();
-async function fetchMine(box){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();if(!base||!key)return null;
+async function fetchMine(box){const base=relayBase(),key=(S.relayKey||"").trim();if(!base||!key)return null;
   const k=box.map(v=>v.toFixed(3)).join(",");if(MINE_CACHE.has(k))return MINE_CACHE.get(k);
   const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),10000);
   try{const r=await fetch(base+"/mine?s="+box[0].toFixed(4)+"&w="+box[1].toFixed(4)+"&n="+box[2].toFixed(4)+"&e="+box[3].toFixed(4),{headers:{"X-RR-Key":key},signal:ctl.signal});
@@ -1350,7 +1351,7 @@ setTiles(tileIdx===1&&Date.now()-(+load("tileIdxT",0)||0)>864e5?0:tileIdx);if(ti
 /* Mac 보관 벡터 지도(우선 사용): 중계 서버 /maps/index.json 의 지역 파일 중 화면 중심이 들어 있는 것을 Range 요청으로 읽어 휴대폰에서 그림.
    지역 밖으로 나가면 기존 래스터 타일로 돌아가고, Mac에 그 위치 주변 지역 파일을 만들어 달라고 요청(위치 기반) */
 var vecLayer=null,vecFile=null,vecRegions=null,vecLib=null,lastEnsure=0;
-const relayBase=()=>(S.relayUrl||"").trim().replace(/\/+$/,"");
+
 function loadVecLib(){if(vecLib)return vecLib;vecLib=new Promise((ok,no)=>{const sc=document.createElement("script");sc.src="https://unpkg.com/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js";sc.onload=()=>ok(window.protomapsL);sc.onerror=no;document.head.appendChild(sc);});return vecLib;}
 async function vecRefresh(){const base=relayBase();if(!base)return;
   try{if(!vecRegions){const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),4000);const r=await fetch(base+"/maps/index.json",{signal:ctl.signal});clearTimeout(tm);if(!r.ok)return;vecRegions=(await r.json()).regions||[];}
@@ -1523,7 +1524,7 @@ function draw(res){
    각 코스는 약 250m 간격 경유점을 따라 지금 도로망으로 다시 그림(공사 구간·공원·단지 내부·큰길 횡단 규칙 그대로 적용).
    코스 사이는 출발지 근처라 짧게 이어 붙이고, 출발→도착 유형은 마지막에 도착지로 감 */
 const MINE_RUNS=new Map();
-async function fetchMineRuns(A){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();if(!base||!key)return null;
+async function fetchMineRuns(A){const base=relayBase(),key=(S.relayKey||"").trim();if(!base||!key)return null;
   const k=A[0].toFixed(3)+","+A[1].toFixed(3);if(MINE_RUNS.has(k))return MINE_RUNS.get(k);
   const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),10000);
   try{const r=await fetch(base+"/mine/runs?lat="+A[0].toFixed(5)+"&lon="+A[1].toFixed(5)+"&r=1500&rmax=3300",{headers:{"X-RR-Key":key},signal:ctl.signal});if(!r.ok)return null;
@@ -1577,12 +1578,13 @@ function routeQ(g,coords,A){if(!g.ll2i){g.ll2i=new Map();for(let k=0;k<g.n;k++)g
    Mac 중계가 Garmin Connect 코스 만들기의 내부 기능을 대신 호출:
    루프 = 자동 왕복(거리·방향, 후보 3개 × 방향), 그 밖 = 앱이 정한 지점들을 Garmin 인기 경로로 연결 */
 const GDIR=["NORTH","EAST","SOUTH","WEST"];
-async function relayCall(path,opt={},ms=60000){const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();
+async function relayCall(path,opt={},ms=60000){const base=relayBase(),key=(S.relayKey||"").trim();
   if(!base||!key)throw new Error("Garmin 인기 경로는 Mac 중계 설정이 필요합니다. 설정에서 중계 주소·키를 넣어 주세요.");
   const ctl=new AbortController(),tm=setTimeout(()=>ctl.abort(),ms);
   try{const r=await fetch(base+path,{...opt,headers:{...(opt.headers||{}),"X-RR-Key":key},signal:ctl.signal});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("중계 오류 "+r.status));return j;}
   catch(e){throw new Error(e.name==="AbortError"?"Garmin 응답이 늦습니다. 잠시 후 다시 시도해 주세요.":e.message);}finally{clearTimeout(tm);}}
-async function garminLoop(A,target,dirSel,onStep){
+async function relayEnsure(onStep){onStep&&onStep("Mac 연결(Tailscale) 확인 중",0);const ck=await relayCheck();if(!ck.ok)throw new Error(ck.msg);}
+async function garminLoop(A,target,dirSel,onStep){await relayEnsure(onStep);
   const dirs=dirSel===""?GDIR:[GDIR[Math.round(((+dirSel)%360)/90)%4]];const all=[];
   for(let i=0;i<dirs.length;i++){onStep("Garmin 자동 왕복 "+(i+1)+"/"+dirs.length+" ("+({NORTH:"북",EAST:"동",SOUTH:"남",WEST:"서"})[dirs[i]]+"쪽)",0);
     try{const j=await relayCall("/garmin/roundtrip?lat="+A[0].toFixed(6)+"&lon="+A[1].toFixed(6)+"&dist="+Math.round(target)+"&dir="+dirs[i]);(j.routes||[]).forEach(r=>all.push({...r,dir:dirs[i]}));}catch(e){if(dirs.length===1)throw e;}}
@@ -1590,7 +1592,7 @@ async function garminLoop(A,target,dirSel,onStep){
   const sc=r=>{const t=cumDist(r.pts).at(-1),st=routeStats(r.pts),bh=blockHit(r.pts)?1:0;return Math.abs(t-target)/target*3+(st?st.orange*2+st.yellow*0.5:0)+bh*10;};   /* 공사 구간 지나는 후보는 사실상 제외 */
   all.sort((a,b)=>sc(a)-sc(b));const b=all[0],total=cumDist(b.pts).at(-1);
   return {coords:b.pts,total,err:(total-target)/target,garmin:{kind:"roundtrip",dir:b.dir,alts:all.length}};}
-async function garminVia(res,target,onStep){
+async function garminVia(res,target,onStep){await relayEnsure(onStep);
   /* 앱이 만든 길에서 약 300m(스케치 250m)마다 지점을 뽑아 Garmin 인기 경로로 연결(실측: 간격이 넓으면 Garmin이 지름길로 잇어 15~45% 짧아짐) */
   if(res.turn&&state.mode==="outback")return garminOutback(state.A,res.turn,target,onStep,res);
   const c=res.coords,step=res.sketch?250:300,pts=[c[0]];let acc=0;for(let i=1;i<c.length;i++){acc+=hav(c[i-1],c[i]);if(acc>=step){pts.push(c[i]);acc=0;}}
@@ -1609,6 +1611,31 @@ async function garminOutback(A,T0,target,onStep,res){let T=T0,best=null;const br
 /* ---------- 진행률 표시 (사용자 요청 2026-10-30) ----------
    단계별 구간(도로망 0~20%, Garmin 참조 20~25%, 맵 계산 25~88%, 정리 88~98%)을 상태 문구에서 추정하고,
    멈춘 것처럼 보이지 않게 0.4초마다 조금씩(남은 양의 1.5%) 올라감. 100%는 끝났을 때만 */
+/* ---------- 중계(Mac) 연결 확인 (사용자 지정 2026-11-02: Garmin 공유 전에 Tailscale 작동부터 확인) ----------
+   1) 설정된 Tailscale 주소로 /maps/index.json(가벼움, Garmin 호출 없음) 5초 → 연결 확인
+   2) 실패하고 이 기기가 Mac이면 같은 Mac의 http://127.0.0.1:8787 로 대체 시도(Mac 미니에서 직접 쓸 때)
+   3) /health 로 중계 키·Garmin 로그인 확인. 결과는 1분간 기억 */
+var RELAY_LOCAL=null,RELAY_CHK=null;
+function relayBase(){return RELAY_LOCAL||(S.relayUrl||"").trim().replace(/\/+$/,"");}
+const isMacDesk=()=>/Mac/.test(navigator.platform||"")&&!("ontouchend" in document);
+async function tfetch(u,opt={},ms=5000){const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);try{return await fetch(u,{...opt,signal:c.signal});}finally{clearTimeout(t);}}
+async function relayCheck(force){if(!force&&RELAY_CHK&&Date.now()-RELAY_CHK.t<60000)return RELAY_CHK;
+  const ts=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim();let r={t:Date.now(),ok:false,via:null,step:null,msg:""};
+  if(!ts||!key){r.step="setup";r.msg="Garmin 중계 설정이 없습니다.";return RELAY_CHK=r;}
+  let base=null;
+  try{const x=await tfetch(ts+"/maps/index.json",{},5000);if(x.ok){base=ts;r.via="tailscale";}}catch(e){}
+  if(!base&&isMacDesk()){try{const x=await tfetch("http://127.0.0.1:8787/maps/index.json",{},2000);if(x.ok){base="http://127.0.0.1:8787";r.via="local";}}catch(e){}}
+  if(!base){r.step="tailscale";r.msg=isMacDesk()
+      ?"Mac 중계에 연결하지 못했습니다. ① 메뉴 막대의 Tailscale 아이콘이 'Connected'인지 ② Mac 미니가 켜져 있는지(잠자기 아님) 확인해 주세요."
+      :"Mac 중계에 연결하지 못했습니다(Tailscale). ① 휴대폰에서 Tailscale 앱을 열어 연결(스위치)을 켜고 ② Mac 미니가 켜져 있는지(잠자기 아님) 확인한 뒤 '다시 확인'을 눌러 주세요.";
+    RELAY_LOCAL=null;return RELAY_CHK=r;}
+  RELAY_LOCAL=r.via==="local"?base:null;
+  try{const h=await tfetch(base+"/health",{headers:{"X-RR-Key":key}},15000);const j=await h.json().catch(()=>({}));
+    if(h.status===401){r.step="key";r.msg="Tailscale 연결은 정상이지만 중계 키가 맞지 않습니다. Mac에서 받은 설정 링크를 다시 붙여넣어 주세요.";return RELAY_CHK=r;}
+    if(!h.ok){r.step="garmin";r.msg="Tailscale·중계 연결은 정상이지만 Garmin 로그인에 문제가 있습니다: "+(j.error||h.status);return RELAY_CHK=r;}
+    r.ok=true;r.garmin=j.garmin;r.msg=(r.via==="local"?"Mac 미니에서 직접 연결":"Tailscale 연결 정상")+" · Garmin 로그인 정상";}
+  catch(e){r.step="relay";r.msg="Tailscale 연결은 됐지만 중계 서버 응답이 없습니다. Mac 미니에서 중계 서비스가 실행 중인지 확인해 주세요.";}
+  return RELAY_CHK=r;}
 const PROG={v:0,t:null,n:0};
 const PROG_TIPS=["같은 길을 두 번 지나면 선 하나로 합쳐 그립니다.","공원 안 길과 아파트 단지 안 길은 맵에 넣지 않습니다.","큰길은 건널목에서만 건너고, 건넜다 다시 건너는 길은 피합니다.","모자란 거리는 도착 지점에서 곧은 흰 도로로 채웁니다.","Garmin 공개 코스가 많이 겹치는 길을 우대합니다."];
 function progShow(on){const o=$("#prog");if(!o)return;if(on){PROG.v=0;PROG.n=0;o.hidden=false;progSet(1,"준비 중…");$("#progTip").textContent="💡 "+PROG_TIPS[Math.floor(Math.random()*PROG_TIPS.length)];
@@ -1728,14 +1755,17 @@ function download(kind){if(!cur)return;const f=fileOf(kind),u=URL.createObjectUR
   a.href=u;a.download=f.name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(u),4000);}
 /* Garmin 공유: Mac 중계 서버(Tailscale) → Garmin Connect 코스 생성(공개) → 링크 팝업 */
 async function garminShare(){
-  const base=(S.relayUrl||"").trim().replace(/\/+$/,""),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
+  const base=relayBase(),key=(S.relayKey||"").trim(),d=$("#gdlg"),msg=$("#gmsg"),lnk=$("#glink");
   lnk.value="";["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=true);
   if(d.showModal)d.showModal();else d.setAttribute("open","");
   $("#gsetup").hidden=true;
   if(!base||!key){msg.textContent="Garmin 중계 설정이 없습니다. Mac에서 복사한 설정 링크를 아래 칸에 붙여넣고 '저장하고 Garmin에 등록'을 눌러 주세요. (한 번만 하면 됩니다)";$("#gsetup").hidden=false;$("#glink").hidden=true;return;}
   $("#glink").hidden=false;
-  msg.textContent="Garmin에 공개 코스로 등록 중…";
-  try{const name=courseName(),r=await fetch(base+"/course",{method:"POST",headers:{"Content-Type":"application/json","X-RR-Key":key},
+  msg.textContent="① Mac 연결(Tailscale) 확인 중…";$("#gretry").hidden=true;
+  const ck=await relayCheck(true);
+  if(!ck.ok){msg.textContent="⚠ "+ck.msg;$("#gretry").hidden=false;if(ck.step==="key"||ck.step==="setup")$("#gsetup").hidden=false;return;}
+  msg.textContent="② "+ck.msg+" → Garmin에 공개 코스로 등록 중…";
+  try{const name=courseName(),r=await fetch(relayBase()+"/course",{method:"POST",headers:{"Content-Type":"application/json","X-RR-Key":key},
       body:JSON.stringify({name,gpx:toGPX(name,cur.coords),public:true})});
     const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
     lnk.value=j.url;["#gcopy","#gopen","#gsend"].forEach(x=>$(x).disabled=false);
@@ -1744,6 +1774,7 @@ async function garminShare(){
   }catch(e){msg.textContent="등록 실패: "+(/Failed to fetch|Load failed|NetworkError/i.test(e.message)?"중계 서버에 연결하지 못했습니다. Mac이 켜져 있고 iPhone·Mac 모두 Tailscale에 연결됐는지 확인해 주세요.":e.message);}
 }
 $("#share").onclick=()=>{if(cur)garminShare();};
+$("#gretry").onclick=()=>{if(cur)garminShare();};
 $("#gsetupBtn").onclick=()=>{const v=$("#gsetupIn").value.trim(),h=new URLSearchParams(v.slice(v.indexOf("#")+1));
   if(!h.get("rr-relay")||!h.get("rr-key")){$("#gmsg").textContent="설정 링크 형식이 아닙니다. Mac에서 복사한 링크 전체를 붙여넣어 주세요.";return;}
   S.relayUrl=h.get("rr-relay");S.relayKey=h.get("rr-key");save("settings",S);$("#relayUrl").value=S.relayUrl;$("#relayKey").value=S.relayKey;$("#gsetupIn").value="";garminShare();};
