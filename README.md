@@ -438,3 +438,10 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - Garmin 인기 경로 엔진도 시작 전에 같은 확인. 중계 주소는 `relayBase()`로 통일(로컬 대체 시 자동 사용).
 - E2E: Tailscale 끊김 / 키 오류 / 정상 등록 3가지 모두 기대대로 안내·진행.
 - 백업: index.v37.html.
+
+## v37 변경 (2026-11-02) — 쓰지 않는 코드 정리(슬림화)
+- 제거: Garmin 코스 라이브러리(courses/ 기반 loadLib·genRef·familiar 등, "내 코스 참조" 체크박스), GraphHopper 엔진·엔진 선택·OSRM 주소·우회 정리 설정 UI, 구버전 스케치(genSketch, genSketchFind로 대체), 미사용 함수(bigShare·coverage·densXY·densify·devMean·download·rastAt·toWorld·toTCX·fileOf), applyPopular의 코스 목록 분기(히트맵 경로만 유지).
+- 설정 패널은 "Mac 중계 설정"(중계 주소·키)만 남김. 기존 저장 설정은 S.v=3로 자동 이전.
+- index.html 211.7KB → 195.0KB. 기능 변화 없음(루프·반환점·A→B·스케치·Garmin 엔진·공유·진행률 E2E 통과).
+- courses/ 데이터와 build_course_index.py는 앱에서 더 이상 쓰지 않지만 파일은 그대로 둠.
+- 백업: index.v37b.html.
