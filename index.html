@@ -1079,9 +1079,11 @@ function cleanSpurs(coords,smax=SPUR_MAX){let c=coords.slice(),cuts=0,removed=0;
   return {coords:c,cuts,removed};}
 /* 도착 지점에서 직진 연장: 도착점에서 흰 도로(주황·노랑·공사 구간 제외)로 deficit/2 떨어진 지점들 중
    경로가 가장 곧은 곳(직선거리/도로거리 최대)을 골라 같은 길로 갔다가 돌아옴 */
+/* 모자란 거리 600m 이하: 도착점에서 같은 길로 되돌아오지 않고 흰 도로로 곧게 더 가서 끝냄(사용자 지정 2026-11-02, 도착점은 근처면 됨) */
+const EXT_ONEWAY=600;
 function extendFinish(coords,deficit){for(const cap of [BIG_W,ORANGE_W,Infinity]){const r=extendFinish1(coords,deficit,cap);if(r)return r;}return null;}
 function extendFinish1(coords,deficit,cap){const g=GRAPH,F=coords[coords.length-1];if(deficit<40||!g||!inBox(g.box,F))return null;
-  const f=streetNode(g,F,80);if(f<0)return null;const h=deficit/2,n=g.n,d=new Float64Array(n).fill(Infinity),par=new Int32Array(n).fill(-1),H=[];
+  const f=streetNode(g,F,80);if(f<0)return null;const one=deficit<=EXT_ONEWAY,h=one?deficit:deficit/2,n=g.n,d=new Float64Array(n).fill(Infinity),par=new Int32Array(n).fill(-1),H=[];
   d[f]=0;H.push([0,f]);
   while(H.length){let bi=0;for(let k=1;k<H.length;k++)if(H[k][0]<H[bi][0])bi=k;const [du,u]=H[bi];H[bi]=H[H.length-1];H.pop();
     if(du>d[u]||du>h*1.15)continue;
@@ -1091,6 +1093,7 @@ function extendFinish1(coords,deficit,cap){const g=GRAPH,F=coords[coords.length-
     const sc=Math.hypot(g.x[v]-g.x[f],g.y[v]-g.y[f])/dv-0.5*Math.abs(dv-h)/h;if(sc>bs){bs=sc;best=v;}}
   if(best<0)return null;const path=[];for(let v=best;v>=0;v=par[v])path.push(v);path.reverse();
   const fwd=path.map(i=>[g.la[i],g.lo[i]]);
+  if(one)return {tail:fwd.slice(1),len:d[best],straight:Math.hypot(g.x[best]-g.x[f],g.y[best]-g.y[f])/d[best],oneway:true};
   return {tail:fwd.slice(1).concat(fwd.slice(0,-1).reverse()),len:d[best]*2,straight:Math.hypot(g.x[best]-g.x[f],g.y[best]-g.y[f])/d[best]};}
 /* 같은 길 두 번 지나기 → 선 하나로 통일 (사용자 지정 2026-10-30, 전체 적용):
    나중에 지나는 구간이 앞서 지난 선과 30m 이내로 40m 이상 나란히 가면(반대 차로·반대편 인도 포함),
@@ -1138,7 +1141,65 @@ function finalizeRoute(res,target,mode,opt={}){if(res.sketch)return res;
   if(mode!=="loop"){const t=trimTail(c);c=t.coords;res.tailTrim=t.cut;}
   let tot=cumDist(c).at(-1);const def=target-tot;
   let d2=Math.min(def,maxExt);for(let k=0;k<2&&d2>Math.max(60,target*0.01);k++){const ex=extendFinish(c,d2);if(!ex)break;if(!res.extTurn)res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;d2=Math.min(target-cumDist(c).at(-1),maxExt-res.ext);}
+  {const sl=spurToLoop(c,target,{keep:mode==="outback"?[res.turn]:[]});c=sl.coords;res.loops=(res.loops||0)+sl.n;}
   res.coords=c;res.total=cumDist(c).at(-1);res.err=(res.total-target)/target;return res;}
+/* ===== 막다른 왕복(갔다가 같은 길로 되돌아오는 꼬리) → 앞으로 이어지는 길로 바꿈 (사용자 지정 2026-11-02, 전체 적용) =====
+   꼬리 끝(반환 지점)에서 되돌아오지 않고, 꼬리 길을 다시 쓰지 않는 길로 '뒤쪽 경로의 한 지점'(꼬리 시작점·이후 지점·도착점)에 다시 붙임.
+   - 꼬리 길 재사용은 큰 비용(사실상 금지), 이미 지난 다른 길도 비용 ↑ → 새 겹침 방지. 단지·공원·공사 길은 A*가 원래 막음
+   - 진짜 막다른 길(이어지는 길 없음)은 대체 길이 꼬리를 되밟게 되므로 그대로 둠
+   - 거리: 바꾼 뒤 목표 거리 오차가 max(4%, 기존 오차+2%) 이내인 후보 중 오차·겹침이 가장 작은 것 */
+const SPUR_LOOP_MIN=60;
+function spurTips(c){const cd=cumDist(c),n=c.length,tot=cd[n-1];if(n<4||tot<200)return [];
+  const at=s=>{s=Math.max(0,Math.min(tot,s));let lo=0,hi=n-1;while(hi-lo>1){const m=(lo+hi)>>1;if(cd[m]<=s)lo=m;else hi=m;}const L=cd[hi]-cd[lo],t=L?(s-cd[lo])/L:0;return [c[lo][0]+(c[hi][0]-c[lo][0])*t,c[lo][1]+(c[hi][1]-c[lo][1])*t];};
+  const out=[];
+  for(let i=1;i<n-1;i++){if(cd[i]<20||tot-cd[i]<20)continue;const m=hav(at(cd[i]-20),at(cd[i]+20));
+    if(m>25||hav(at(cd[i]-10),at(cd[i]+10))>18)continue;
+    if(out.length&&cd[i]-out[out.length-1].s<50){const o=out[out.length-1];if(m<o.m){o.i=i;o.s=cd[i];o.m=m;}continue;}
+    out.push({i,s:cd[i],m});}
+  for(const o of out){let L=20;while(o.s-L-20>=0&&o.s+L+20<=tot&&hav(at(o.s-L-20),at(o.s+L+20))<=30)L+=20;o.L=L;
+    let b=o.i;while(b<n-1&&cd[b]<o.s+L)b++;o.b=b;let a=o.i;while(a>0&&cd[a]>o.s-L)a--;o.a=a;}
+  return out.filter(o=>o.L>=SPUR_LOOP_MIN);}
+/* 꼬리 시작점 B에서 출발해 다른 길로 돌아오는 고리(B→X→B, 가는 길·오는 길 겹침 40m 이하)로 꼬리 전체(갔다 오기)를 대체 */
+function spurCycle(g,c,o,ids,spur,used,tot,target,lim,cd){const B=ids[o.a];if(B<0)return null;const ek=(u,v)=>u<v?u+"-"+v:v+"-"+u,rem=cd[o.b]-cd[o.a];
+  const plen=p=>{let L=0;for(let m=1;m<p.length;m++){const a=p[m-1],b=p[m];for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){L+=g.len[e];break;}}return L;};
+  let best=null;
+  for(const R of [o.L*0.5,o.L*0.8,o.L*1.2])for(let k=0;k<8;k++){const an=k*Math.PI/4,X=nearestNode(g,[g.x[B]+R*Math.sin(an),g.y[B]+R*Math.cos(an)],Math.max(60,R*0.4),true);if(X<0||X===B)continue;
+    const p1=astar(g,B,X,(u,v)=>{const q=ek(u,v);return spur.has(q)?60:(used.has(q)?2:0);});if(!p1)continue;const s1=new Set();for(let m=1;m<p1.length;m++)s1.add(ek(p1[m-1],p1[m]));
+    const p2=astar(g,X,B,(u,v)=>{const q=ek(u,v);return s1.has(q)?60:(spur.has(q)?60:(used.has(q)?2:0));});if(!p2)continue;
+    let ov=0;for(let m=1;m<p2.length;m++){const q=ek(p2[m-1],p2[m]);if(s1.has(q)||spur.has(q)){for(let e=g.off[p2[m-1]];e<g.off[p2[m-1]+1];e++)if(g.to[e]===p2[m]){ov+=g.len[e];break;}}}
+    if(ov>40)continue;const L=plen(p1)+plen(p2),err=Math.abs(tot-rem+L-target);if(err>lim)continue;
+    if(!best||err<best.err)best={err,p:p1.concat(p2.slice(1))};}
+  return best?best.p.map(i=>[g.la[i],g.lo[i]]):null;}
+function spurToLoop(coords,target,opt={}){const g=GRAPH;if(!g||coords.length<4||!inBox(g.box,coords[0]))return {coords,n:0};
+  let c=coords.slice(),fixed=0;const keep=(opt.keep||[]).filter(Boolean),failed=[];
+  /* 거리 허용폭은 처음 경로 기준으로 한 번만 정함(여러 번 고치며 오차가 누적되지 않게) */
+  const lim=Math.max(target*0.04,Math.abs(cumDist(coords).at(-1)-target)+target*0.02);
+  if(!g.ll2i){g.ll2i=new Map();for(let i=0;i<g.n;i++)g.ll2i.set(g.la[i]+","+g.lo[i],i);}
+  const node=p=>{const i=g.ll2i.get(p[0]+","+p[1]);return i!=null?i:nearestNode(g,p,30);};
+  const ek=(u,v)=>u<v?u+"-"+v:v+"-"+u;
+  for(let guard=0;guard<16;guard++){
+    const tips=spurTips(c).filter(o=>!keep.some(k=>hav(k,c[o.i])<80)&&!failed.some(f=>hav(f,c[o.i])<40));if(!tips.length)break;
+    const o=tips.sort((x,y)=>y.L-x.L)[0],cd=cumDist(c),tot=cd[cd.length-1],ids=c.map(node);
+    const spur=new Set(),used=new Set();
+    for(let k=1;k<c.length;k++){const u=ids[k-1],v=ids[k];if(u<0||v<0||u===v)continue;const key=ek(u,v);if(k>o.a&&k<=o.b)spur.add(key);else used.add(key);}
+    const t=ids[o.i];if(t<0){failed.push(c[o.i]);continue;}
+    const pen=(u,v)=>{const key=ek(u,v);return spur.has(key)?60:(used.has(key)?2:0);};
+    const ks=[];let last=-1e9;for(let k=o.b;k<c.length;k++){if(cd[k]-cd[o.b]>6000)break;if(cd[k]-last>=60&&hav(c[o.i],c[k])<=2000){ks.push(k);last=cd[k];}}
+    if(ks[ks.length-1]!==c.length-1&&hav(c[o.i],c[c.length-1])<=2000)ks.push(c.length-1);
+    const step=Math.max(1,Math.ceil(ks.length/40));let best=null;
+    for(let q=0;q<ks.length;q+=step){const k=ks[q],v=ids[k];if(v<0||v===t)continue;
+      const path=astar(g,t,v,pen);if(!path||path.length<2)continue;
+      let L=0,ov=0,ov2=0;for(let m=1;m<path.length;m++){const a=path[m-1],b=path[m];let el=0;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){el=g.len[e];break;}L+=el;const key=ek(a,b);if(spur.has(key))ov+=el;else if(used.has(key))ov2+=el;}
+      if(ov>Math.min(40,o.L*0.25))continue;
+      const ntot=tot-(cd[k]-cd[o.i])+L,err=Math.abs(ntot-target);if(err>lim)continue;
+      const sc=err/target*4+ov2/Math.max(L,1)*1.5;
+      if(!best||sc<best.sc)best={sc,k,path,L};}
+    if(!best){const cyc=spurCycle(g,c,o,ids,spur,used,tot,target,lim,cd);
+      if(cyc){c=c.slice(0,o.a).concat(cyc,c.slice(o.b+1));fixed++;continue;}
+      failed.push(c[o.i]);continue;}
+    const P=best.path.map(i=>[g.la[i],g.lo[i]]);c=c.slice(0,o.i+1).concat(P.slice(hav(P[0],c[o.i])<1?1:0),c.slice(best.k+1));fixed++;}
+  if(fixed&&Math.abs(cumDist(c).at(-1)-target)>lim){c=coords;fixed=0;}   /* 안전장치: 거리가 허용폭을 벗어나면 원래 경로 유지 */
+  return {coords:c,n:fixed,left:spurTips(c).filter(o=>!keep.some(k=>hav(k,c[o.i])<80)).length};}
 /* ===== END local-graph ===== */
 
 /* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
@@ -1586,6 +1647,7 @@ async function generate(newSeed){
     if(res.garmin){res.blkWarn=!!blockHit(res.coords);}
     else if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     if(!res.sketch&&!res.garmin){step("짧은 우회 정리",res.total||0);res=finalizeRoute(res,target,state.mode);if(blockHit(res.coords))res=await avoidBlocks(res);}
+    if(res.garmin){const sl=spurToLoop(res.coords,target,{keep:state.mode==="outback"?[res.turn]:[]});if(sl.n){res.coords=sl.coords;res.loops=sl.n;res.total=cumDist(res.coords).at(-1);res.err=(res.total-target)/target;}}
     if(innerRuns(res.coords).length){step("아파트 단지·공원 안 길 빼는 중",res.total||0);res=await avoidInner(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     res.coords=thin(res.coords);
     if(!res.sketch){res.ut=badUturns(res.coords,null,[res.turn,res.extTurn].filter(Boolean)).length;}
