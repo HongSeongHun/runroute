@@ -248,6 +248,38 @@ def warm_loop():
         except Exception: traceback.print_exc()
         time.sleep(24 * 3600)
 
+# ---- Garmin 코스 만들기 경로 엔진 (사용자 지정 2026-10-31) ----
+# Garmin Connect 웹 코스 만들기가 쓰는 내부 API(공개 문서 아님, 웹 번들 5.30.1.6에서 확인):
+#   자동 왕복: GET  /course-service/course/roundTripRoutes/multiple?startLat&startLon&distance(m)&direction&routeType=POPULARITY&courseType=RUNNING → 후보 3개
+#   지점 연결: POST /course-service/course/route/v2?routeType=POPULARITY&courseType=RUNNING  body{startLat,startLon,endLat,endLon,deviceType:"WEB"}
+GDIRS = ["NORTH", "EAST", "SOUTH", "WEST"]   # 대각선(NORTH_EAST 등)은 Garmin이 거부(400 Not a valid direction, 2026-10-31 확인)
+def _pts_len(P):
+    return sum(hav({"latitude": P[i-1][0], "longitude": P[i-1][1]}, {"latitude": P[i][0], "longitude": P[i][1]}) for i in range(1, len(P)))
+def g_roundtrip(lat, lon, dist, direction, avoid_high=True):
+    g = garmin(); q = {"startLat": lat, "startLon": lon, "distance": int(dist), "direction": direction, "routeType": "POPULARITY", "courseType": "RUNNING"}
+    if avoid_high: q["avoidHighTrafficRoads"] = "true"
+    r = g.client.connectapi("/course-service/course/roundTripRoutes/multiple", params=q)
+    out = []
+    for c in r.get("roundTripRouteCourses") or []:
+        P = [[round(p["latitude"], 6), round(p["longitude"], 6)] for p in (c.get("geoPoints") or []) if p.get("latitude") is not None]
+        if len(P) > 1: out.append({"d": round(c.get("distanceMeter") or _pts_len(P)), "pts": P})
+    return {"routes": out, "direction": direction}
+def g_route(pts, avoid_high=True):
+    g = garmin(); q = {"routeType": "POPULARITY", "courseType": "RUNNING"}
+    if avoid_high: q["avoidHighTrafficRoads"] = "true"
+    P = []; fails = 0
+    for i in range(1, len(pts)):
+        a, b = pts[i-1], pts[i]
+        try:
+            r = g.client.post("connectapi", "/course-service/course/route/v2", params=q, json={"startLat": a[0], "startLon": a[1], "endLat": b[0], "endLon": b[1], "deviceType": "WEB"}, api=True)
+            seg = [q2 for line in (r.get("route") or []) for q2 in line]
+            seg = [[round(x[0], 6), round(x[1], 6)] for x in seg if isinstance(x, (list, tuple)) and len(x) >= 2]
+        except Exception:
+            seg = []; fails += 1
+        if not seg: seg = [list(a), list(b)]
+        P += seg if not P else seg[1:] if P[-1] == seg[0] else seg
+    return {"pts": P, "d": round(_pts_len(P)), "fails": fails}
+
 # ---- 내 러닝 기록 (사용자 지정 2026-10-31: '내 러닝코스 근처를 기본으로') ----
 # 최근 12개월 내 러닝 활동 GPS 선을 ~/.runroute/mine/ 에 저장(활동당 1회), 하루 한 번 새 활동만 추가.
 # /mine?s&w&n&e (키 필요): 범위 안 칸(약 27m)별 '내가 달린 횟수' 반환. 좌표 원본은 보내지 않음.
@@ -414,6 +446,14 @@ class H(BaseHTTPRequestHandler):
             q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             try: return self.reply(200, maps_ensure(float(q["lat"]), float(q["lon"])))
             except Exception as ex: return self.reply(400, {"error": str(ex)})
+        if p0 == "/garmin/roundtrip":
+            if not self.authed(): return
+            from urllib.parse import urlparse, parse_qs
+            q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            try:
+                d = q.get("dir", "NORTH"); d = d if d in GDIRS else "NORTH"
+                return self.reply(200, g_roundtrip(float(q["lat"]), float(q["lon"]), float(q["dist"]), d, q.get("avoid", "1") == "1"))
+            except Exception as ex: traceback.print_exc(); return self.reply(502, {"error": f"Garmin 자동 왕복 실패: {ex}"})
         if p0 == "/mine/runs":
             if not self.authed(): return
             from urllib.parse import urlparse, parse_qs
@@ -449,6 +489,14 @@ class H(BaseHTTPRequestHandler):
                 traceback.print_exc(); self.reply(502, {"error": f"Garmin 코스 검색 실패: {ex}"})
         else: self.reply(404, {"error": "not found"})
     def do_POST(self):
+        if self.path.split("?")[0].rstrip("/") == "/garmin/route":
+            if not self.authed(): return
+            n = int(self.headers.get("Content-Length") or 0)
+            if n <= 0 or n > MAX_BODY: return self.reply(413, {"error": "요청 크기 오류"})
+            try:
+                req = json.loads(self.rfile.read(n)); pts = req["pts"][:80]
+                return self.reply(200, g_route(pts, bool(req.get("avoid", True))))
+            except Exception as ex: traceback.print_exc(); return self.reply(502, {"error": f"Garmin 경로 연결 실패: {ex}"})
         if self.path.rstrip("/") != "/course": return self.reply(404, {"error": "not found"})
         if not self.authed(): return
         n = int(self.headers.get("Content-Length") or 0)

@@ -421,3 +421,13 @@ cat ~/.runroute_relay_key | pbcopy                                 # 키 복사(
 - 정보란에 '내가 실제로 달린 코스 n개(+ 주변 길 x km)', '같은 길 반복 %', '내 길·인기 길 %' 표시.
 - E2E(PMH): 10km 내 코스 1개+주변 5.9km(반복 22%), 21km 내 코스 2개(26%), 30km 내 코스 2개+주변 9.3km(32%) / 3개(36%), 최대 반경 2.7km.
 - 백업: index.v35.html.
+
+## v35 변경 (2026-11-02) — 길 만드는 방식에 'Garmin 인기 경로' 추가
+- Garmin MCP와 같은 로그인 토큰(~/.garminconnect)으로 Mac 중계가 Garmin Connect 코스 만들기 내부 기능 호출(공개 문서 아님, 웹 번들 5.30.1.6에서 확인):
+  자동 왕복 `GET /course-service/course/roundTripRoutes/multiple?startLat&startLon&distance&direction(NORTH|EAST|SOUTH|WEST)&routeType=POPULARITY&courseType=RUNNING&avoidHighTrafficRoads=true`(후보 3개),
+  지점 연결 `POST /course-service/course/route/v2?routeType=POPULARITY…` body{startLat,startLon,endLat,endLon,deviceType:"WEB"}.
+- 중계: `/garmin/roundtrip`, `/garmin/route`(키 필요). 대각선 방향은 Garmin이 거부(400).
+- 앱: '길 만드는 방식' = RunRoute / Garmin 인기 경로. 루프 = Garmin 자동 왕복(방향 자동이면 4방향×3 = 12후보, 거리 오차·공사 구간·큰길로 선택), 반환점 왕복 = Garmin이 출발→반환점→출발 연결 + 반환점 거리 보정(최대 3회), 출발→도착·스케치 = 앱이 만든 길에서 300m(스케치 250m)마다 지점 → Garmin 연결.
+- 실측(집 출발): 자동 왕복 5/10/21/30km 모두 후보 중 오차 1~3% 이내 존재. 지점 연결은 간격 1.2km면 15~45% 짧아져 300m로 설정(그래도 10~15% 짧아질 수 있음, 정보란 오차 표시).
+- Garmin 결과에는 RunRoute 규칙이 적용되지 않으므로 공사 구간 통과는 경고 표시(자동 왕복 후보 선택 시 사실상 제외).
+- 백업: index.v36.html.
