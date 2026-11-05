@@ -74,7 +74,8 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .note{font-size:12px;color:var(--muted)}
 .km-label{font:600 10px var(--f-mono);color:#fff;background:var(--route);border-radius:99px;padding:1px 5px;white-space:nowrap;border:1px solid #fff}
 .pin{font:700 12px var(--f-body);color:#fff;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)}
-.pin.a{background:var(--accent)} .pin.b{background:#24324a}
+.pin.a{background:var(--accent)} .pin.b{background:#24324a} .pin.v{background:#7b3fe4} .linkbtn{border:0;background:none;padding:0;color:var(--accent);text-decoration:underline;cursor:pointer;font:inherit}
+.vlist{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}.vlist li{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font-size:13px}.vlist .vn{flex:0 0 22px;height:22px;border-radius:50%;background:#7b3fe4;color:#fff;display:grid;place-items:center;font-weight:700;font-size:12px}.vlist .vt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.vlist .vb{flex:0 0 auto;min-width:32px;height:32px;border:1px solid var(--line);border-radius:6px;background:transparent;cursor:pointer}
 .picker{display:flex;align-items:center;gap:4px;background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:10px;padding:4px;box-shadow:0 1px 6px rgba(0,0,0,.2);font:13px var(--f-body)}
 .picker span{padding:0 6px;color:var(--muted);font-size:12px}
 .picker button{font:inherit;font-weight:600;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:7px;padding:7px 11px;cursor:pointer}
@@ -136,6 +137,17 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
       </div>
       <ul class="results" id="resB" hidden></ul>
       <span class="coord" id="cB">-</span>
+    </div>
+
+    <div class="pt" id="ptV">
+      <label class="lbl" for="qV">경유지 <small>(들르고 싶은 곳, 최대 5곳 · 선택)</small></label>
+      <div class="row">
+        <input id="qV" placeholder="장소 검색 후 Enter" autocomplete="off" enterkeyhint="search">
+        <button class="btn" type="button" id="addV">지도에서 추가</button>
+      </div>
+      <ul class="results" id="resV" hidden></ul>
+      <ol class="vlist" id="listV" hidden></ol>
+      <span class="note" id="noteV">출발 → 경유지(번호 순서) → 도착 순으로 지납니다. 루프는 출발지로 돌아오고, 반환점 왕복은 마지막 경유지에서 같은 길로 돌아옵니다. 핀은 끌어서 옮길 수 있습니다. <button type="button" class="linkbtn" id="clrV" hidden>모두 지우기</button></span>
     </div>
 
     <div class="pt" id="engBox">
@@ -1067,10 +1079,11 @@ function thinLoop(c,i,j,span){const seg=c.slice(i,j+1),cd=cumDist(seg),L=cd[cd.l
   const at=s=>{let k=1;while(k<cd.length-1&&cd[k]<s)k++;const t=(s-cd[k-1])/Math.max(1e-9,cd[k]-cd[k-1]);return [seg[k-1][0]+(seg[k][0]-seg[k-1][0])*t,seg[k-1][1]+(seg[k][1]-seg[k-1][1])*t];};
   const N=Math.max(4,Math.floor(L/20));let ok=0;for(let k=0;k<N;k++){const s=(k+0.5)*L/2/N;if(hav(at(s),at(L-s))<=45)ok++;}
   return ok>=0.85*N;}
-function cleanSpurs(coords,smax=SPUR_MAX){let c=coords.slice(),cuts=0,removed=0;
+function cleanSpurs(coords,smax=SPUR_MAX,keepPts=[]){let c=coords.slice(),cuts=0,removed=0;
   for(let guard=0;guard<60;guard++){const cd=cumDist(c),tot=cd[cd.length-1],lim=Math.min(smax,tot*0.3);let done=false;
     for(let i=0;i<c.length-2&&!done;i++){let jb=-1;
       for(let j=i+2;j<c.length&&cd[j]-cd[i]<=lim;j++){const h=hav(c[i],c[j]),span=cd[j]-cd[i];if(h<=SPUR_TOL&&span>=Math.max(30,4*h)&&thinLoop(c,i,j,span))jb=j;}
+      if(jb>0&&keepPts.length&&keepPts.some(k=>{for(let q=i+1;q<jb;q++)if(hav(k,c[q])<=40)return hav(k,c[i])>40&&hav(k,c[jb])>40;return false;}))jb=-1;   /* 경유지를 지나는 꼬리는 지우지 않음 */
       if(jb>0){let con=connector(c[i],c[jb]);const before=cd[jb]-cd[i],gap=hav(c[i],c[jb]);
         /* 같은 교차로 안(15m 이내)인데 도로 데이터가 끊겨 돌아가는 경우 → 직선으로 잇기 */
         if((!con||cumDist(con).at(-1)>=before-20)&&gap<=15)con=[c[i],c[jb]];if(!con)continue;const nc=c.slice(0,i).concat(con,c.slice(jb+1));
@@ -1136,12 +1149,12 @@ function finalizeRoute(res,target,mode,opt={}){if(res.sketch)return res;
   /* 도착 후 직진 연장은 최대 max(1.2km, 목표의 10%)까지만(멀리 왕복 금지, 2026-10-31) */
   const maxExt=opt.maxExt!=null?opt.maxExt:Math.max(1200,target*0.1);
   let c=res.coords;
-  if(mode!=="outback"){const cs=cleanSpurs(c,res.mine?40:SPUR_MAX);   /* 내 기록 조합: 실제로 뛰던 왕복 구간은 유지, 경유점 맞추다 생긴 150m 이하 꼬리만 정리 */c=cs.coords;res.spurCuts=cs.cuts;}
-  if(!res.mine){const u=unifyOverlap(c);c=u.coords;res.unified=u.n;}   /* 내 기록 조합은 여러 코스가 같은 길을 지나는 게 정상 → 합치지 않음 */
+  if(mode!=="outback"){const cs=cleanSpurs(c,res.mine?40:SPUR_MAX,res.via?res.via.pts:[]);   /* 내 기록 조합: 실제로 뛰던 왕복 구간은 유지, 경유점 맞추다 생긴 150m 이하 꼬리만 정리 */c=cs.coords;res.spurCuts=cs.cuts;}
+  if(!res.mine){const u=unifyOverlap(c);if(!(res.via&&viaMissed(u.coords,res.via.pts).length)){c=u.coords;res.unified=u.n;}}   /* 선 통일로 경유지를 비켜 가게 되면 통일하지 않음 */   /* 내 기록 조합은 여러 코스가 같은 길을 지나는 게 정상 → 합치지 않음 */
   if(mode!=="loop"){const t=trimTail(c);c=t.coords;res.tailTrim=t.cut;}
   let tot=cumDist(c).at(-1);const def=target-tot;
   let d2=Math.min(def,maxExt);for(let k=0;k<2&&d2>Math.max(60,target*0.01);k++){const ex=extendFinish(c,d2);if(!ex)break;if(!res.extTurn)res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;d2=Math.min(target-cumDist(c).at(-1),maxExt-res.ext);}
-  {const sl=spurToLoop(c,target,{keep:mode==="outback"?[res.turn]:[]});c=sl.coords;res.loops=(res.loops||0)+sl.n;}
+  {const sl=spurToLoop(c,target,{keep:mode==="outback"?[res.turn]:[],via:res.via?res.via.pts:[]});c=sl.coords;res.loops=(res.loops||0)+sl.n;}
   res.coords=c;res.total=cumDist(c).at(-1);res.err=(res.total-target)/target;return res;}
 /* ===== 막다른 왕복(갔다가 같은 길로 되돌아오는 꼬리) → 앞으로 이어지는 길로 바꿈 (사용자 지정 2026-11-02, 전체 적용) =====
    꼬리 끝(반환 지점)에서 되돌아오지 않고, 꼬리 길을 다시 쓰지 않는 길로 '뒤쪽 경로의 한 지점'(꼬리 시작점·이후 지점·도착점)에 다시 붙임.
@@ -1183,18 +1196,20 @@ function spurToLoop(coords,target,opt={}){const g=GRAPH;if(!g||coords.length<4||
     const spur=new Set(),used=new Set();
     for(let k=1;k<c.length;k++){const u=ids[k-1],v=ids[k];if(u<0||v<0||u===v)continue;const key=ek(u,v);if(k>o.a&&k<=o.b)spur.add(key);else used.add(key);}
     const t=ids[o.i];if(t<0){failed.push(c[o.i]);continue;}
+    const near=(opt.via||[]).map(v=>{const a=[];for(let q=0;q<c.length;q++)if(hav(v,c[q])<=40)a.push(q);return a;}).filter(a=>a.length);
+    const skipsVia=(lo,hi)=>near.some(a=>a.every(q=>q>lo&&q<hi));   /* 이 구간을 지우면 경유지를 안 지나게 되는지 */
     const pen=(u,v)=>{const key=ek(u,v);return spur.has(key)?60:(used.has(key)?2:0);};
     const ks=[];let last=-1e9;for(let k=o.b;k<c.length;k++){if(cd[k]-cd[o.b]>6000)break;if(cd[k]-last>=60&&hav(c[o.i],c[k])<=2000){ks.push(k);last=cd[k];}}
     if(ks[ks.length-1]!==c.length-1&&hav(c[o.i],c[c.length-1])<=2000)ks.push(c.length-1);
     const step=Math.max(1,Math.ceil(ks.length/40));let best=null;
-    for(let q=0;q<ks.length;q+=step){const k=ks[q],v=ids[k];if(v<0||v===t)continue;
+    for(let q=0;q<ks.length;q+=step){const k=ks[q],v=ids[k];if(v<0||v===t||skipsVia(o.i,k))continue;
       const path=astar(g,t,v,pen);if(!path||path.length<2)continue;
       let L=0,ov=0,ov2=0;for(let m=1;m<path.length;m++){const a=path[m-1],b=path[m];let el=0;for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){el=g.len[e];break;}L+=el;const key=ek(a,b);if(spur.has(key))ov+=el;else if(used.has(key))ov2+=el;}
       if(ov>Math.min(40,o.L*0.25))continue;
       const ntot=tot-(cd[k]-cd[o.i])+L,err=Math.abs(ntot-target);if(err>lim)continue;
       const sc=err/target*4+ov2/Math.max(L,1)*1.5;
       if(!best||sc<best.sc)best={sc,k,path,L};}
-    if(!best){const cyc=spurCycle(g,c,o,ids,spur,used,tot,target,lim,cd);
+    if(!best){const cyc=skipsVia(o.a-1,o.b+1)?null:spurCycle(g,c,o,ids,spur,used,tot,target,lim,cd);
       if(cyc){c=c.slice(0,o.a).concat(cyc,c.slice(o.b+1));fixed++;continue;}
       failed.push(c[o.i]);continue;}
     const P=best.path.map(i=>[g.la[i],g.lo[i]]);c=c.slice(0,o.i+1).concat(P.slice(hav(P[0],c[o.i])<1?1:0),c.slice(best.k+1));fixed++;}
@@ -1313,13 +1328,14 @@ function setPoint(which,ll,label){
 let pick="A";
 const Picker=L.Control.extend({options:{position:"topright"},onAdd(){
   const d=L.DomUtil.create("div","picker");
-  d.innerHTML='<span>탭하여 지정</span><button type="button" data-p="A" aria-pressed="true">출발</button><button type="button" data-p="B" aria-pressed="false">도착</button><button type="button" id="me" title="현재 위치로 이동" aria-label="현재 위치로 이동">◎</button>';
+  d.innerHTML='<span>탭하여 지정</span><button type="button" data-p="A" aria-pressed="true">출발</button><button type="button" data-p="B" aria-pressed="false">도착</button><button type="button" data-p="V" aria-pressed="false">경유</button><button type="button" id="me" title="현재 위치로 이동" aria-label="현재 위치로 이동">◎</button>';
   L.DomEvent.disableClickPropagation(d);return d;}});
 map.addControl(new Picker());
 function setPick(p){pick=p;document.querySelectorAll(".picker [data-p]").forEach(b=>b.setAttribute("aria-pressed",String(b.dataset.p===p)));}
 document.querySelectorAll(".picker [data-p]").forEach(b=>b.onclick=()=>setPick(b.dataset.p));
 map.on("click",e=>{ if(prefDrawing)return;
   const ll=[e.latlng.lat,e.latlng.lng];
+  if(pick==="V"&&state.mode!=="sketch"){addVia(ll);return;}
   if(state.mode!=="a2b"||pick==="A"){setPoint("A",ll);if(state.mode==="a2b")setPick("B");}
   else setPoint("B",ll);
 });
@@ -1346,6 +1362,7 @@ document.querySelectorAll("#mode button").forEach(b=>b.onclick=()=>{
   $("#ptB").hidden=state.mode!=="a2b"; if(mB) (state.mode==="a2b"?mB.addTo(map):mB.remove());
   const pb=document.querySelector('.picker [data-p="B"]'); if(pb) pb.hidden=state.mode!=="a2b";
   setPick(state.mode==="a2b"&&state.A?"B":"A");
+  $("#ptV").hidden=sk;const pv=document.querySelector('.picker [data-p="V"]');if(pv)pv.hidden=sk;if(typeof renderVia==="function")renderVia();
 });
 
 /* Nominatim geocoding: on submit only (no autocomplete, per usage policy) */
@@ -1358,10 +1375,10 @@ async function geocode(which){
   try{const r=await fetch(url);if(!r.ok)throw new Error(r.status);const j=await r.json();
     ul.innerHTML="";if(!j.length){ul.innerHTML="<li>결과가 없습니다. 지도를 탭해 지정해 주세요.</li>";return;}
     j.forEach(x=>{const li=document.createElement("li");li.textContent=x.display_name;
-      li.onclick=()=>{setPoint(which,[x.lat,x.lon],x.name||q);map.setView([+x.lat,+x.lon],15);ul.hidden=true;};ul.append(li);});
+      li.onclick=()=>{if(which==="V"){addVia([x.lat,x.lon],x.name||q);$("#qV").value="";}else setPoint(which,[x.lat,x.lon],x.name||q);map.setView([+x.lat,+x.lon],15);ul.hidden=true;};ul.append(li);});
   }catch(e){ul.innerHTML="<li>검색 서버에 연결하지 못했습니다.</li>";}
 }
-["A","B"].forEach(w=>$("#q"+w).addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();geocode(w);}}));
+["A","B","V"].forEach(w=>$("#q"+w).addEventListener("keydown",e=>{if(e.key==="Enter"){e.preventDefault();geocode(w);}}));
 $("#locA").onclick=()=>locate(true);
 
 function status(t,err){const s=$("#status");s.textContent=t;s.classList.toggle("err",!!err);}
@@ -1400,6 +1417,7 @@ function draw(res){
   if(res.garmin)ri.textContent=(res.garmin.kind==="roundtrip"?"Garmin 인기 경로 · 자동 왕복("+({NORTH:"북",EAST:"동",SOUTH:"남",WEST:"서"})[res.garmin.dir]+"쪽, 후보 "+res.garmin.alts+"개 중 선택)":(res.garmin.kind==="outback"?"Garmin 인기 경로 · 반환점 왕복(반환점까지 Garmin이 연결)":"Garmin 인기 경로 · 앱이 정한 "+res.garmin.n+"구간을 Garmin이 연결")+(res.garmin.fails?" (연결 실패 "+res.garmin.fails+"구간은 직선)":""))+(res.blkWarn?" · ⚠ 공사(통행 불가) 구간을 지납니다":"");
   if(res.mine&&!res.garmin)ri.textContent+=" · 내가 실제로 달린 코스 "+res.mine.n+"개("+res.mine.dates.map((d,i)=>d.slice(2).replace(/-/g,".")+" "+(res.mine.dists[i]/1000).toFixed(1)+"km").join(", ")+")"+(res.mine.walk?" + 주변 길 "+(res.mine.walk/1000).toFixed(1)+"km":"");
   if(res.q)ri.textContent+=" · 같은 길 반복 "+Math.round(res.q.rep*100)+"% · 내 길·인기 길 "+Math.round(res.q.known*100)+"%";
+  if(res.via){const ms=viaMissed(res.coords,res.via.pts);ri.textContent="경유지 "+res.via.n+"곳"+(ms.length?" (⚠ "+ms.join("·")+"번 경유지를 비켜 감)":" 모두 지남")+(res.via.base>(res.total||0)*0.97?" · 경유지만 이어도 "+(res.via.base/1000).toFixed(1)+"km라 목표보다 길 수 있음":"")+" · "+ri.textContent;}
   if(res.laps>1)ri.textContent+=" · 같은 코스 "+res.laps+"바퀴(1바퀴 "+(res.lapLen/1000).toFixed(1)+"km)";
   if(GRAPH&&GRAPH.parkN&&!res.garmin)ri.textContent+=" · 공원 안 길 제외";
   if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
@@ -1510,9 +1528,11 @@ async function garminLoop(A,target,dirSel,onStep){await relayEnsure(onStep);
   return {coords:b.pts,total,err:(total-target)/target,garmin:{kind:"roundtrip",dir:b.dir,alts:all.length}};}
 async function garminVia(res,target,onStep){await relayEnsure(onStep);
   /* 앱이 만든 길에서 약 300m(스케치 250m)마다 지점을 뽑아 Garmin 인기 경로로 연결(실측: 간격이 넓으면 Garmin이 지름길로 잇어 15~45% 짧아짐) */
-  if(res.turn&&state.mode==="outback")return garminOutback(state.A,res.turn,target,onStep,res);
+  if(res.turn&&state.mode==="outback"&&!res.via)return garminOutback(state.A,res.turn,target,onStep,res);
   const c=res.coords,step=res.sketch?250:300,pts=[c[0]];let acc=0;for(let i=1;i<c.length;i++){acc+=hav(c[i-1],c[i]);if(acc>=step){pts.push(c[i]);acc=0;}}
   if(hav(pts[pts.length-1],c[c.length-1])>20)pts.push(c[c.length-1]);
+  if(res.via&&state.V.length){/* 경유지는 Garmin 지점에 꼭 넣음(경로 순서대로) */const idx=p=>{let b=0,bd=Infinity;for(let k=0;k<c.length;k++){const d=hav(p,c[k]);if(d<bd){bd=d;b=k;}}return b;};
+    const tagged=pts.map(p=>({p,k:idx(p)}));res.via.pts.forEach(v=>{const k=idx(v);if(!tagged.some(t=>hav(t.p,c[k])<30))tagged.push({p:c[k],k});});tagged.sort((a,b)=>a.k-b.k);pts.length=0;tagged.forEach(t=>pts.push(t.p));}
   onStep("Garmin 인기 경로로 "+(pts.length-1)+"구간 잇는 중",res.total||0);
   const j=await relayCall("/garmin/route",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({pts:pts.slice(0,80)})},120000);
   const total=cumDist(j.pts).at(-1);
@@ -1565,6 +1585,47 @@ function progFromStep(i,msg){let v=null;const m=String(msg),fr=[...m.matchAll(/(
   else if(/길 찾는 중/.test(m)&&fr.length)v=25+55*fr[0][0]/fr[0][1];
   else if(/도로망 불러오는/.test(m))v=10;else if(/구역/.test(m))v=60;else if(/짧은 우회|공사/.test(m))v=90;
   progSet(v==null?PROG.v+1:v,m.replace(/ · [\d.]+km$/,""));}
+/* ===== 경유지 (사용자 요청 2026-11-05): 출발 → 경유지(순서대로) → 도착 =====
+   루프: 출발 → 경유지들 → 출발 / 반환점 왕복: 출발 → 경유지들(마지막 경유지 = 반환점) → 같은 길로 출발 / 출발→도착: 출발 → 경유지들 → 도착
+   거리 맞추기: 경유지만 바로 이은 길이(A*)보다 목표가 길면 모자란 거리를 구간 길이 비율로 나눠, 각 구간을 동네 골목 길(흰 도로·단지·공원·큰길 횡단 규칙 그대로)로 그림 */
+const VIA_MAX=5;
+state.V=(load("ptV",[])||[]).filter(v=>v&&v.ll).slice(0,VIA_MAX);let mV=[];
+const vpin=n=>L.divIcon({className:"",html:'<div class="pin v">'+n+'</div>',iconSize:[24,24],iconAnchor:[12,12]});
+function renderVia(){mV.forEach(m=>m.remove());mV=[];const ol=$("#listV");ol.innerHTML="";const on=state.mode!=="sketch";
+  state.V.forEach((v,i)=>{if(on){const m=L.marker(v.ll,{icon:vpin(i+1),draggable:true}).addTo(map);m.on("dragend",e=>{const p=e.target.getLatLng();v.ll=[p.lat,p.lng];v.label="";saveVia();});mV.push(m);}
+    const li=document.createElement("li");li.innerHTML='<span class="vn">'+(i+1)+'</span><span class="vt"></span>';li.querySelector(".vt").textContent=v.label||(v.ll[0].toFixed(5)+", "+v.ll[1].toFixed(5));
+    if(i>0){const up=document.createElement("button");up.type="button";up.className="vb";up.textContent="↑";up.title="앞으로";up.setAttribute("aria-label",(i+1)+"번 경유지를 앞으로");up.onclick=()=>{[state.V[i-1],state.V[i]]=[state.V[i],state.V[i-1]];saveVia();};li.append(up);}
+    const rm=document.createElement("button");rm.type="button";rm.className="vb";rm.textContent="✕";rm.title="삭제";rm.setAttribute("aria-label",(i+1)+"번 경유지 삭제");rm.onclick=()=>{state.V.splice(i,1);saveVia();};li.append(rm);ol.append(li);});
+  ol.hidden=!state.V.length;$("#addV").disabled=state.V.length>=VIA_MAX;$("#clrV").hidden=!state.V.length;}
+function saveVia(){save("ptV",state.V);renderVia();}
+function addVia(ll,label){if(state.V.length>=VIA_MAX){status("경유지는 최대 "+VIA_MAX+"곳까지 넣을 수 있습니다.",true);return;}state.V.push({ll:[+ll[0],+ll[1]],label:label||""});saveVia();
+  status("경유지 "+state.V.length+"번을 넣었습니다."+(state.V.length<VIA_MAX?" 지도를 더 탭하면 다음 경유지가 추가됩니다.":""));}
+/* 구간마다 무작위 골목 길이라 거리 오차가 매번 다름 → 최대 3번 그려 정리 후 오차가 가장 작은 것 */
+async function genVia(target,step){let best=null,adj=0;for(let t=0;t<3;t++){const r=await genVia1(target,step,adj);if(r.via.base>=target*0.97)return r;
+    const pv=finalizeRoute({...r,coords:r.coords.slice()},target,state.mode,{maxExt:0}),e=Math.abs(pv.total-target)/target;if(!best||e<best.e)best={r,e};if(e<=0.02)break;
+    adj-=(pv.total-target)*(state.mode==="outback"?0.5:1);}   /* 다음 시도는 정리 후 넘친/모자란 만큼 보정 */
+  return best.r;}
+async function genVia1(target,step,adj=0){const g=GRAPH,mode=state.mode;
+  if(!g)throw new Error("경유지 맵은 주변 도로 정보가 필요합니다. 잠시 후 다시 시도해 주세요.");
+  /* 경유지 핀을 가장 가까운 '진짜 길'(흰 도로·생활도로) 위 지점으로 옮겨서 계산: 건물·단지 안을 찍어도 그 앞 길을 지남 */
+  const V=state.V.map((v,i)=>{if(!inBox(g.box,v.ll))return v.ll;const n=streetNode(g,v.ll,250);if(n<0)throw new Error("경유지 "+(i+1)+"번 근처 250m 안에 달릴 수 있는 길이 없습니다. 길 가까이로 옮겨 주세요.");return [g.la[n],g.lo[n]];});
+  const pts=[state.A,...V];if(mode==="a2b")pts.push(state.B);else if(mode==="loop")pts.push(state.A);
+  const far=pts.findIndex(p=>!inBox(g.box,p));if(far>=0)throw new Error((far>V.length?"도착지":"경유지 "+far+"번")+"가 도로 정보 범위 밖입니다(출발지에서 너무 멂). 더 가까운 곳으로 옮겨 주세요.");
+  const P=[pts[0]];for(let i=1;i<pts.length;i++)if(hav(P[P.length-1],pts[i])>=30)P.push(pts[i]);if(P.length<2)throw new Error("경유지가 출발지와 너무 가깝습니다.");
+  const T=(mode==="outback"?target/2:target)+adj,legs=[];
+  for(let i=1;i<P.length;i++){step("경유지 사이 길 찾는 중 "+i+"/"+(P.length-1),0);await sleep(0);let d;try{d=routeLocal([P[i-1],P[i]]);}catch(e){d=null;}
+    if(!d)throw new Error((i<P.length-1||mode==="outback"?"경유지 "+i+"번":"도착 지점")+" 근처로 이어지는 달릴 수 있는 길이 없습니다(단지·공원 안이면 길가로 옮겨 주세요).");legs.push(d);}
+  const base=legs.reduce((s,l)=>s+l.dist,0),def=T-base;let coords=null,walked=0;
+  for(let i=0;i<legs.length;i++){const lt=legs[i].dist+Math.max(0,def)*legs[i].dist/base;let seg=null;
+    if(lt-legs[i].dist>200){step("경유지 구간 "+(i+1)+"/"+legs.length+" 맵 그리는 중",0);
+      try{const w=await genWalkAsync(P[i],P[i+1],lt,step);if(w&&Math.abs(w.total-lt)/lt<=0.15){seg=w.coords;walked++;}}catch(e){}}
+    if(!seg)seg=legs[i].coords;coords=coords?coords.concat(seg.slice(1)):seg.slice();}
+  let turn=null;if(mode==="outback"){turn=coords[coords.length-1];coords=coords.concat(coords.slice(0,-1).reverse());}
+  const total=cumDist(coords).at(-1);
+  return {coords,total,err:(total-target)/target,turn,via:{n:V.length,pts:V,base:mode==="outback"?base*2:base,walked,legs:legs.length}};}
+function viaMissed(coords,pts){return (pts||state.V.map(v=>v.ll)).map((v,i)=>{let m=Infinity;for(let k=0;k<coords.length;k++)m=Math.min(m,hav(v,coords[k]));return m>40?i+1:0;}).filter(Boolean);}
+$("#addV").onclick=()=>{setPick("V");status("지도를 탭하면 경유지가 추가됩니다. 다 넣었으면 위쪽 '출발'·'도착' 버튼으로 돌아가세요.");};
+$("#clrV").onclick=()=>{state.V=[];saveVia();};
 async function generate(newSeed){
   if(newSeed) state.seed++;
   const target=parseFloat($("#dist").value)*1000;
@@ -1582,14 +1643,16 @@ async function generate(newSeed){
   try{
     let res=null;const GENG=$("#gEng")?$("#gEng").value:"rr";
     if(S.engine==="local"&&state.mode!=="sketch"){
-      const ab=state.mode==="a2b"&&state.B, ctr=ab?[(state.A[0]+state.B[0])/2,(state.A[1]+state.B[1])/2]:state.A;
-      const need=ab?hav(state.A,state.B)/2+target*0.3:state.mode==="outback"?target*0.55:target*0.38;
+      const ab=state.mode==="a2b"&&state.B;let ctr=ab?[(state.A[0]+state.B[0])/2,(state.A[1]+state.B[1])/2]:state.A;
+      let need=ab?hav(state.A,state.B)/2+target*0.3:state.mode==="outback"?target*0.55:target*0.38;
+      if(state.V.length){const all=[state.A,...state.V.map(v=>v.ll)].concat(ab?[state.B]:[]);ctr=[all.reduce((s,p)=>s+p[0],0)/all.length,all.reduce((s,p)=>s+p[1],0)/all.length];need=Math.max(need,Math.max(...all.map(p=>hav(ctr,p)))+800);}
       /* 반경 3km 타일을 항상 준비. 계산 지점이 타일 밖이면 그 계산만 OSRM으로 자동 전환(route()) */
-      status("도로망 불러오는 중…");progSet(5,"주변 도로 정보 불러오는 중…");try{await loadGraph(ctr,Math.min(need,3000));}catch(e){status(e.message+" OSRM으로 계산합니다.");}
+      status("도로망 불러오는 중…");progSet(5,"주변 도로 정보 불러오는 중…");try{await loadGraph(ctr,Math.min(need,state.V.length?5000:3000));}catch(e){status(e.message+" OSRM으로 계산합니다.");}
       if(GRAPH){status("Garmin 공개 러닝 코스 참조 중…");progSet(20,"다른 러너들이 많이 달린 길 확인 중…");await usePopular(GRAPH);progSet(25,"달리기 맵 계산 중…");}
     }
     if(GRAPH)renderPref();
-    if(GENG==="garmin"&&state.mode==="loop"){res=await garminLoop(state.A,target,$("#dir").value,step);}
+    if(state.V.length&&state.mode!=="sketch"){res=await genVia(target,step);}
+    else if(GENG==="garmin"&&state.mode==="loop"){res=await garminLoop(state.A,target,$("#dir").value,step);}
     else if(state.mode==="sketch"){const c=map.getCenter(),C=state.A||[c.lat,c.lng];res=await genSketchFind(C,target,shape,+$("#skR").value||6000,step);showSkCands(res);}
     if(res) ;
     else{
@@ -1647,7 +1710,7 @@ async function generate(newSeed){
     if(res.garmin){res.blkWarn=!!blockHit(res.coords);}
     else if(blockHit(res.coords)){step("공사 구간 우회 중",res.total||0);res=await avoidBlocks(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     if(!res.sketch&&!res.garmin){step("짧은 우회 정리",res.total||0);res=finalizeRoute(res,target,state.mode);if(blockHit(res.coords))res=await avoidBlocks(res);}
-    if(res.garmin){const sl=spurToLoop(res.coords,target,{keep:state.mode==="outback"?[res.turn]:[]});if(sl.n){res.coords=sl.coords;res.loops=sl.n;res.total=cumDist(res.coords).at(-1);res.err=(res.total-target)/target;}}
+    if(res.garmin){const sl=spurToLoop(res.coords,target,{keep:state.mode==="outback"?[res.turn]:[],via:res.via?res.via.pts:[]});if(sl.n){res.coords=sl.coords;res.loops=sl.n;res.total=cumDist(res.coords).at(-1);res.err=(res.total-target)/target;}}
     if(innerRuns(res.coords).length){step("아파트 단지·공원 안 길 빼는 중",res.total||0);res=await avoidInner(res);res.total=cumDist(res.coords).at(-1);if(res.err!=null)res.err=(res.total-target)/target;}
     res.coords=thin(res.coords);
     if(!res.sketch){res.ut=badUturns(res.coords,null,[res.turn,res.extTurn].filter(Boolean)).length;}
@@ -1656,6 +1719,8 @@ async function generate(newSeed){
       status(f>=0.8?"모양이 잘 맞는 스케치 맵입니다. 아래 후보 버튼으로 다른 장소도 볼 수 있습니다."
         :f>=0.68?"대략 알아볼 수 있는 수준입니다. 대각선 획(V·W·X 등)은 바둑판 도로에서 계단·사각형으로 바뀝니다. '다른 맵 그리기'로 다른 위치를 시도해 보세요."
         :"이 범위 도로로는 알아보기 어렵습니다. 찾을 범위를 넓히거나, 모양 거리를 늘리거나(모양이 커짐), 글자 수를 줄여 보세요.",f<0.68);}
+    else if(res.via&&!res.note){const pc=Math.round(res.err*1000)/10,ms=viaMissed(res.coords,res.via.pts);
+      status(ms.length?"⚠ "+ms.join("·")+"번 경유지를 지나지 못했습니다. 핀을 길 가까이로 옮겨 다시 그려 주세요.":(res.via.base>=target*0.97?"경유지만 이어도 "+(res.via.base/1000).toFixed(1)+"km입니다(목표보다 김). 경유지를 모두 지나는 가장 짧은 맵입니다.":Math.abs(res.err)<=0.05?"경유지를 모두 지나는 달리기 맵입니다 (목표 대비 "+(pc>0?"+":"")+pc+"%).":"경유지를 모두 지나지만 거리 오차가 큽니다 ("+(pc>0?"+":"")+pc+"%). '다른 맵 그리기'로 재시도해 보세요."),!!ms.length);}
     else status(res.note||(Math.abs(res.err)<=TOL?"목표 거리에 맞는 달리기 맵입니다.":"오차가 큽니다. '다른 맵 그리기'로 재시도해 보세요."), !!res.note);
   }catch(e){
     status((e&&e.message&&!/Failed to fetch|NetworkError|Load failed/i.test(e.message))?e.message:"길 찾기 서버에 연결하지 못했습니다. 네트워크 또는 엔진 설정을 확인해 주세요.",true);
@@ -1726,7 +1791,7 @@ $("#shape").addEventListener("change",e=>{const v=e.target.value,t=$("#sketchTex
 
 /* restore last session */
 const lm=load("mode","loop");document.querySelector('#mode button[data-mode="'+lm+'"]').click();
-const pA=load("ptA",null),pB=load("ptB",null);if(pA)setPoint("A",pA);if(pB)setPoint("B",pB);
+const pA=load("ptA",null),pB=load("ptB",null);if(pA)setPoint("A",pA);if(pB)setPoint("B",pB);renderVia();
 if(mB&&state.mode!=="a2b")mB.remove();
 locate(false);
 </script>
