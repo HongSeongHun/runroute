@@ -27,14 +27,22 @@
 html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--f-body)}
 .app{display:flex;flex-direction:column;height:100%}
-#map{flex:1 1 auto;min-height:42vh;background:var(--line)}
-.sheet{flex:0 0 auto;max-height:58vh;overflow-y:auto;background:var(--panel);border-top:1px solid var(--line);
+/* 휴대폰(세로 화면): 지도는 화면 높이의 60%(최소 300px, 메뉴용 140px는 남김)로 항상 보장, 메뉴는 그 아래에서 따로 스크롤 (2026-11-06)
+   손잡이(━)를 누르면 지도 82% ↔ 60% 전환 */
+#map{flex:0 0 auto;height:60vh;height:clamp(300px,60dvh,calc(100dvh - 140px));background:var(--line);transition:height .2s ease}
+.app.mapBig #map{height:clamp(300px,82dvh,calc(100dvh - 90px))}
+.sheet{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:var(--panel);border-top:1px solid var(--line);
   padding-block:14px calc(14px + env(safe-area-inset-bottom,0px));
   padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
   display:flex;flex-direction:column;gap:14px}
+.sheet>*{flex-shrink:0}
+.grip{align-self:center;width:100%;height:22px;margin:-10px 0 -6px;border:0;background:none;cursor:pointer;display:grid;place-items:center;color:var(--muted);font-size:11px}
+.grip::before{content:"";width:44px;height:5px;border-radius:3px;background:var(--line)}
 @media (min-width:860px){
   .app{flex-direction:row-reverse}
-  .sheet{width:390px;max-height:none;height:100%;border-top:0;border-right:1px solid var(--line)}
+  #map,.app.mapBig #map{flex:1 1 auto;height:auto}
+  .sheet{flex:0 0 390px;width:390px;height:100%;border-top:0;border-right:1px solid var(--line)}
+  .grip{display:none}
 }
 h1{font-size:17px;margin:0;letter-spacing:.01em;display:flex;align-items:baseline;gap:8px}
 h1 small{font-weight:400;color:var(--muted);font-size:12px}
@@ -109,6 +117,7 @@ details .inner{display:flex;flex-direction:column;gap:8px;margin-top:8px}
   <div id="map" role="application" aria-label="지도"></div>
 
   <section class="sheet">
+    <button type="button" class="grip" id="grip" aria-label="지도 크게 보기" title="지도 크게/작게"></button>
     <h1>RunRoute <small>달리기 맵 그리기 → Garmin 코스</small></h1>
 
     <div>
@@ -1691,6 +1700,10 @@ async function genVia1(target,step,adj=0){const g=GRAPH,mode=state.mode;
 function viaMissed(coords,pts){return (pts||state.V.map(v=>v.ll)).map((v,i)=>{let m=Infinity;for(let k=0;k<coords.length;k++)m=Math.min(m,hav(v,coords[k]));return m>40?i+1:0;}).filter(Boolean);}
 $("#addV").onclick=()=>{setPick("V");status("지도를 탭하면 경유지가 추가됩니다. 다 넣었으면 위쪽 '출발'·'도착' 버튼으로 돌아가세요.");};
 $("#clrV").onclick=()=>{state.V=[];saveVia();};
+/* 지도 크기 전환(휴대폰): 손잡이를 누르면 지도 크게 ↔ 기본. 크기가 바뀌면 Leaflet에 알려 타일을 다시 맞춤 */
+$("#grip").onclick=()=>{const a=document.querySelector(".app"),big=a.classList.toggle("mapBig");$("#grip").setAttribute("aria-label",big?"지도 작게 보기":"지도 크게 보기");save("mapBig",big);setTimeout(()=>map.invalidateSize(),250);};
+if(load("mapBig",false)){document.querySelector(".app").classList.add("mapBig");setTimeout(()=>map.invalidateSize(),50);}
+window.addEventListener("resize",()=>map.invalidateSize());
 async function generate(newSeed){
   if(newSeed) state.seed++;
   const target=parseFloat($("#dist").value)*1000;
