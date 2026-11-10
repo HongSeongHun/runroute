@@ -1170,12 +1170,13 @@ function finalizeRoute(res,target,mode,opt={}){if(res.sketch)return res;
   if(mode!=="outback"){const cs=cleanSpurs(c,res.mine?40:SPUR_MAX,res.via?res.via.pts:[]);   /* 내 기록 조합: 실제로 뛰던 왕복 구간은 유지, 경유점 맞추다 생긴 150m 이하 꼬리만 정리 */c=cs.coords;res.spurCuts=cs.cuts;}
   if(!res.mine){const u=unifyOverlap(c);if(!(res.via&&viaMissed(u.coords,res.via.pts).length)){c=u.coords;res.unified=u.n;}}   /* 선 통일로 경유지를 비켜 가게 되면 통일하지 않음 */   /* 내 기록 조합은 여러 코스가 같은 길을 지나는 게 정상 → 합치지 않음 */
   if(mode!=="loop"){const t=trimTail(c);c=t.coords;res.tailTrim=t.cut;}
-  let tot=cumDist(c).at(-1);const def=target-tot;
-  let d2=Math.min(def,maxExt);for(let k=0;k<2&&d2>Math.max(60,target*0.01);k++){const ex=extendFinish(c,d2);if(!ex)break;if(!res.extTurn)res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;d2=Math.min(target-cumDist(c).at(-1),maxExt-res.ext);}
   {const vp=res.via?res.via.pts:[],xb=crossBackFix(c,target,{via:vp});c=xb.coords;res.xback=(res.xback||0)+xb.n;
    const sl=spurToLoop(c,target,{keep:mode==="outback"?[res.turn]:[],via:vp});c=sl.coords;res.loops=(res.loops||0)+sl.n;
    if(sl.n){const x2=crossBackFix(c,target,{via:vp});c=x2.coords;res.xback+=x2.n;}
-   {const d3=target-cumDist(c).at(-1);if(d3>Math.max(60,target*0.01)&&d3<=EXT_ONEWAY&&(res.ext||0)<maxExt){const ex=extendFinish(c,d3);if(ex&&ex.oneway){const nc=c.concat(ex.tail);if(!crossBacks(nc).length||crossBacks(nc).length<=crossBacks(c).length){c=nc;res.ext=(res.ext||0)+ex.len;}}}}   /* 고친 뒤 모자란 거리는 앞으로 곧게만 보충 */
+   /* 정리·고치기를 모두 마친 뒤 모자란 거리를 채움(직진 600m 이하 / 그 이상은 도착점 고리) */
+   if(maxExt>0)for(let r=0;r<2;r++){const before=cumDist(c).at(-1);c=fillDistance(c,target,maxExt,res);if(cumDist(c).at(-1)-before<1)break;
+     /* 채운 구간도 같은 안전 규칙 검사(되건너기·꼬리) → 줄어든 만큼 한 번 더 채움 */
+     const x3=crossBackFix(c,target,{via:vp});c=x3.coords;res.xback+=x3.n;const sl2=spurToLoop(c,target,{keep:mode==="outback"?[res.turn]:[],via:vp});c=sl2.coords;res.loops+=sl2.n;}
    res.xbLeft=crossBacks(c).length;}
   res.coords=c;res.total=cumDist(c).at(-1);res.err=(res.total-target)/target;return res;}
 /* ===== 막다른 왕복(갔다가 같은 길로 되돌아오는 꼬리) → 앞으로 이어지는 길로 바꿈 (사용자 지정 2026-11-02, 전체 적용) =====
@@ -1287,6 +1288,37 @@ function crossBackFix(coords,target,opt={}){const g=GRAPH;if(!g||coords.length<4
     if(L>old+Math.max(400,old*0.3)||Math.abs(ntot-target)>lim||crossBacks(nc).some(x=>x.name===b.name&&Math.abs(x.s0-b.s0)<300)){failed.push(b);continue;}
     c=nc;fixed++;}
   return {coords:c,n:fixed,left:crossBacks(c).length};}
+/* ===== 모자란 거리 채우기 (사용자 지정 2026-11-10: 10km 목표에 7km 금지) =====
+   정리(짧은 우회 제거·꼬리/되건너기 고치기) 뒤 모자란 거리:
+   - 600m 이하: 도착점에서 흰 도로로 곧게 더 감(되돌아오지 않음)
+   - 그 이상: 도착점에서 '다른 길로 도는 고리'(F→X→F, 가는 길·오는 길 겹침 60m 이하, 이미 지난 길 비용 ↑)를 모자란 거리만큼 붙임
+     → 같은 길 왕복 없이 거리를 맞춤. 고리를 못 찾으면 예전처럼 직진 왕복(최대 max(1.2km,10%))
+   - 고리는 앱 도로망 A*라 단지·공원·공사 길 제외, 큰길 횡단 비용 규칙 그대로 */
+function loopExtend(c,deficit){const g=GRAPH;if(!g||deficit<200||!inBox(g.box,c[c.length-1]))return null;
+  if(!g.ll2i){g.ll2i=new Map();for(let i=0;i<g.n;i++)g.ll2i.set(g.la[i]+","+g.lo[i],i);}
+  const ek=(u,v)=>u<v?u+"-"+v:v+"-"+u,used=new Set();let prev=-1;
+  for(const p of c){const i=g.ll2i.get(p[0]+","+p[1]);const n=i!=null?i:-1;if(n>=0&&prev>=0&&n!==prev)used.add(ek(prev,n));prev=n;}
+  const F=streetNode(g,c[c.length-1],120);if(F<0)return null;
+  const plen=p=>{let L=0;for(let m=1;m<p.length;m++){const a=p[m-1],b=p[m];for(let e=g.off[a];e<g.off[a+1];e++)if(g.to[e]===b){L+=g.len[e];break;}}return L;};
+  let best=null;const tol=Math.max(150,deficit*0.1);
+  for(const f of [0.3,0.22,0.38,0.16,0.45])for(let k=0;k<8;k++){const R=deficit*f,an=k*Math.PI/4+(f*7%1);
+      const X=nearestNode(g,[g.x[F]+R*Math.sin(an),g.y[F]+R*Math.cos(an)],Math.max(80,R*0.35),true);if(X<0||X===F)continue;
+      const p1=astar(g,F,X,(u,v)=>used.has(ek(u,v))?3:0);if(!p1)continue;const s1=new Set();for(let m=1;m<p1.length;m++)s1.add(ek(p1[m-1],p1[m]));
+      const p2=astar(g,X,F,(u,v)=>{const q=ek(u,v);return s1.has(q)?60:(used.has(q)?3:0);});if(!p2)continue;
+      let ov=0;for(let m=1;m<p2.length;m++){if(s1.has(ek(p2[m-1],p2[m]))){for(let e=g.off[p2[m-1]];e<g.off[p2[m-1]+1];e++)if(g.to[e]===p2[m]){ov+=g.len[e];break;}}}
+      if(ov>60)continue;const L=plen(p1)+plen(p2),err=Math.abs(L-deficit);
+      const sc=err+ov*3;if(!best||sc<best.sc)best={sc,err,L,p:p1.concat(p2.slice(1))};
+      if(best.err<=tol*0.3)break;}
+  if(!best||best.err>tol)return null;
+  const P=best.p.map(i=>[g.la[i],g.lo[i]]);const lead=hav(c[c.length-1],P[0])<1?P.slice(1):P;
+  return {tail:lead,len:best.L};}
+function fillDistance(c,target,maxExt,res){
+  for(let k=0;k<3;k++){const d=target-cumDist(c).at(-1);if(d<=Math.max(60,target*0.01))break;
+    if(d<=EXT_ONEWAY){const ex=extendFinish(c,d);if(ex&&ex.oneway){c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;}break;}
+    const lp=loopExtend(c,d);if(lp){c=c.concat(lp.tail);res.extLoop=(res.extLoop||0)+lp.len;continue;}
+    const d2=Math.min(d,maxExt-(res.ext||0));if(d2<=Math.max(60,target*0.01))break;const ex=extendFinish(c,d2);if(!ex)break;
+    if(!res.extTurn)res.extTurn=ex.tail[Math.floor((ex.tail.length-1)/2)];c=c.concat(ex.tail);res.ext=(res.ext||0)+ex.len;}
+  return c;}
 /* ===== END local-graph ===== */
 
 /* random loop shape: 3~5 waypoints, jittered angles and radii (fixed per generation, then scaled) */
@@ -1490,11 +1522,12 @@ function draw(res){
   if(res.mine&&!res.garmin)ri.textContent+=" · 내가 실제로 달린 코스 "+res.mine.n+"개("+res.mine.dates.map((d,i)=>d.slice(2).replace(/-/g,".")+" "+(res.mine.dists[i]/1000).toFixed(1)+"km").join(", ")+")"+(res.mine.walk?" + 주변 길 "+(res.mine.walk/1000).toFixed(1)+"km":"");
   if(res.q)ri.textContent+=" · 같은 길 반복 "+Math.round(res.q.rep*100)+"% · 내 길·인기 길 "+Math.round(res.q.known*100)+"%";
   if(res.via){const ms=viaMissed(res.coords,res.via.pts);ri.textContent="경유지 "+res.via.n+"곳"+(ms.length?" (⚠ "+ms.join("·")+"번 경유지를 비켜 감)":" 모두 지남")+(res.via.base>(res.total||0)*0.97?" · 경유지만 이어도 "+(res.via.base/1000).toFixed(1)+"km라 목표보다 길 수 있음":"")+" · "+ri.textContent;}
+  if(res.extLoop)ri.textContent+=" · 모자란 거리 "+(res.extLoop/1000).toFixed(2)+"km는 도착점 주변 고리로 채움";
   if(res.xback)ri.textContent+=" · 길 건넜다 바로 되건너기 "+res.xback+"곳 없앰";if(res.xbLeft)ri.textContent+=" · ⚠ 되건너기 "+res.xbLeft+"곳 남음(다른 맵 그리기 권장)";
   if(GRAPH&&GRAPH.popInfo&&GRAPH.popOffN)ri.textContent+=" · Garmin 공개 코스가 없는 길은 거의 쓰지 않음";
   if(res.laps>1)ri.textContent+=" · 같은 코스 "+res.laps+"바퀴(1바퀴 "+(res.lapLen/1000).toFixed(1)+"km)";
   if(GRAPH&&GRAPH.parkN&&!res.garmin)ri.textContent+=" · 공원 안 길 제외";
-  if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km(왕복)";
+  if(res.ext)ri.textContent+=" · 도착 후 직진 연장 "+(res.ext/1000).toFixed(2)+"km"+(res.extTurn?"(왕복)":"");
   {const st=res.garmin?null:routeStats(res.coords);if(st){ri.textContent+=" · 주황 "+Math.round(st.orange*100)+"% · 노랑 "+Math.round(st.yellow*100)+"%"+(st.xbad?" · ⚠ 건널목 표시 없는 주황 도로 횡단 "+st.xbad+"곳(지도 표시)":" · 주황 도로는 건널목·신호등에서만 횡단");
     res._xp=st.xp;}}
   const css=getComputedStyle(document.documentElement), C1=css.getPropertyValue("--route").trim()||"#6d28d9", C2=css.getPropertyValue("--route-back").trim()||"#0891b2";
