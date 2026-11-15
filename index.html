@@ -29,6 +29,7 @@ body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--f-body)}
 .app{display:flex;flex-direction:column;height:100%}
 /* 휴대폰(세로 화면): 지도는 화면 높이의 60%(최소 300px, 메뉴용 140px는 남김)로 항상 보장, 메뉴는 그 아래에서 따로 스크롤 (2026-11-06)
    손잡이(━)를 누르면 지도 82% ↔ 60% 전환 */
+#mapToast{position:absolute;left:50%;top:64px;transform:translateX(-50%);z-index:1000;max-width:86%;background:rgba(20,24,32,.88);color:#fff;font-size:13px;line-height:1.45;padding:8px 12px;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,.3);pointer-events:none;text-align:center}
 #map{flex:0 0 auto;height:60vh;height:clamp(300px,60dvh,calc(100dvh - 140px));background:var(--line);transition:height .2s ease}
 .app.mapBig #map{height:clamp(300px,82dvh,calc(100dvh - 90px))}
 .sheet{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;background:var(--panel);border-top:1px solid var(--line);
@@ -1446,14 +1447,27 @@ map.on("click",e=>{ if(prefDrawing)return;
 
 /* current location: blue dot + recenter, asked once on load */
 let meDot=null,meLL=null;
-function locate(thenSetStart){
-  if(!navigator.geolocation){status("이 브라우저는 위치 기능을 지원하지 않습니다. 지도를 탭해 지정해 주세요.",true);return;}
-  navigator.geolocation.getCurrentPosition(p=>{
-    meLL=[p.coords.latitude,p.coords.longitude];
+/* 현재 위치 (2026-11-15 보강):
+   - ◎: 지도를 현재 위치로 옮기고, 출발지가 없거나 현재 위치에서 3km 넘게 떨어져 있으면(예: 호치민에 저장된 출발지) 출발지도 현재 위치로
+   - 진행·오류 안내는 지도 위 말풍선으로(메뉴가 스크롤돼 있어도 보이게)
+   - 정밀 위치가 10초 안에 안 잡히면 일반 정밀도로 한 번 더 */
+const FAR_START=3000;
+function mapToast(msg,ms=3500){let t=document.getElementById("mapToast");if(!t){t=document.createElement("div");t.id="mapToast";t.setAttribute("role","status");document.getElementById("map").appendChild(t);}
+  t.textContent=msg;t.hidden=false;clearTimeout(mapToast.tm);if(ms)mapToast.tm=setTimeout(()=>{t.hidden=true;},ms);}
+function locate(thenSetStart,quiet){
+  if(!navigator.geolocation){const m="이 브라우저는 위치 기능을 지원하지 않습니다. 지도를 탭해 지정해 주세요.";status(m,true);mapToast(m,6000);return;}
+  if(!quiet)mapToast("현재 위치 찾는 중…",0);
+  const ok=p=>{meLL=[p.coords.latitude,p.coords.longitude];
     if(meDot)meDot.setLatLng(meLL);else meDot=L.circleMarker(meLL,{radius:7,color:"#fff",weight:2,fillColor:"#1a73e8",fillOpacity:1}).addTo(map);
     map.setView(meLL,Math.max(map.getZoom(),15));
-    if(thenSetStart||!state.A){setPoint("A",meLL,"현재 위치");if(state.mode==="a2b")setPick("B");}
-  },()=>status("위치 권한이 없거나 확인할 수 없습니다. 지도를 탭해 출발지를 지정해 주세요.",true),{enableHighAccuracy:true,timeout:10000,maximumAge:60000});
+    const far=state.A&&hav(state.A,meLL)>FAR_START;
+    if(thenSetStart||!state.A||far){setPoint("A",meLL,"현재 위치");if(state.mode==="a2b")setPick("B");
+      if(far)mapToast("출발지가 현재 위치에서 멀어 현재 위치로 바꿨습니다.",4000);else if(!quiet)mapToast("현재 위치를 출발지로 정했습니다.",2500);}
+    else if(!quiet)mapToast("현재 위치로 이동했습니다.",2000);};
+  const fail=e=>{const m=e&&e.code===1?"위치 권한이 꺼져 있습니다. iPhone 설정 → 개인정보 보호 및 보안 → 위치 서비스에서 사용하는 브라우저(Safari 등)를 '앱을 사용하는 동안'으로 바꾼 뒤 다시 눌러 주세요."
+      :"현재 위치를 확인하지 못했습니다. 잠시 후 다시 누르거나 지도를 탭해 출발지를 지정해 주세요.";status(m,true);if(!quiet||(e&&e.code===1))mapToast(m,7000);};
+  navigator.geolocation.getCurrentPosition(ok,e=>{if(e&&e.code===3)navigator.geolocation.getCurrentPosition(ok,fail,{enableHighAccuracy:false,timeout:10000,maximumAge:120000});else fail(e);},
+    {enableHighAccuracy:true,timeout:10000,maximumAge:30000});
 }
 $("#me").onclick=()=>locate(false);
 
@@ -1904,7 +1918,7 @@ $("#shape").addEventListener("change",e=>{const v=e.target.value,t=$("#sketchTex
 const lm=load("mode","loop");document.querySelector('#mode button[data-mode="'+lm+'"]').click();
 const pA=load("ptA",null),pB=load("ptB",null);if(pA)setPoint("A",pA);if(pB)setPoint("B",pB);renderVia();
 if(mB&&state.mode!=="a2b")mB.remove();
-locate(false);
+locate(false,true);
 </script>
 <script>
 /* 지도 타일 캐시(Service Worker): 한 번 본 지도 조각은 휴대폰에 7일 보관 → 다시 볼 때 네트워크 없이 즉시 표시 */
